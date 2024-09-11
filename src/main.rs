@@ -1,9 +1,6 @@
 use glow::HasContext;
 use rapier2d::prelude::*;
-use sdl3::{
-    event::{Event, WindowEvent},
-    keyboard::Keycode,
-};
+
 use std::{
     ops::Mul,
     time::{Duration, Instant},
@@ -326,12 +323,12 @@ enum State {
 
 // the sdl3 crate does not expose the API for setting the hit test, so we have to do it using the raw bindings
 // we really don't care about the window or the point, so we just return SDL_HITTEST_DRAGGABLE
-unsafe extern "C" fn hit_test_fn(
-    _: *mut sdl3::sys::SDL_Window,
-    _: *const sdl3::sys::SDL_Point,
+extern "C" fn hit_test_fn(
+    _: *mut sdl3_sys::video::SDL_Window,
+    _: *const sdl3_sys::rect::SDL_Point,
     _: *mut std::ffi::c_void,
-) -> sdl3::sys::SDL_HitTestResult {
-    sdl3::sys::SDL_HitTestResult::SDL_HITTEST_DRAGGABLE
+) -> sdl3_sys::video::SDL_HitTestResult {
+    sdl3_sys::video::SDL_HitTestResult::DRAGGABLE
 }
 
 fn create_vertex_buffer(gl: &glow::Context) -> glow::NativeVertexArray {
@@ -433,9 +430,10 @@ fn draw_texture_affine(
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let sdl = sdl3::init()?;
-    let video = sdl.video()?;
+fn main() {
+    unsafe {
+        sdl3_sys::init::SDL_Init(sdl3_sys::init::SDL_INIT_VIDEO | sdl3_sys::init::SDL_INIT_EVENTS)
+    };
 
     let mut rigid_body_set = RigidBodySet::new();
     let mut collider_set = ColliderSet::new();
@@ -486,29 +484,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut multibody_joint_set = MultibodyJointSet::new();
     let mut ccd_solver = CCDSolver::new();
 
-    video.gl_attr().set_stencil_size(1);
-
-    let window = video
-        .window("snowglobe ", 224 * 2, 248 * 2)
-        .set_window_flags(
-            sdl3::sys::SDL_WindowFlags::SDL_WINDOW_TRANSPARENT as u32
-                | sdl3::sys::SDL_WindowFlags::SDL_WINDOW_ALWAYS_ON_TOP as u32,
+    let window = unsafe {
+        sdl3_sys::video::SDL_GL_SetAttribute(sdl3_sys::video::SDL_GLattr::STENCIL_SIZE, 1);
+        sdl3_sys::video::SDL_CreateWindow(
+            c"snowglobe".as_ptr(), // <3 c string literals
+            224 * 2,
+            248 * 2,
+            sdl3_sys::video::SDL_WINDOW_OPENGL
+                | sdl3_sys::video::SDL_WINDOW_TRANSPARENT
+                | sdl3_sys::video::SDL_WINDOW_ALWAYS_ON_TOP
+                | sdl3_sys::video::SDL_WINDOW_BORDERLESS,
         )
-        .borderless()
-        .opengl()
-        .build()?;
+    };
 
     // set the hit test to allow the window to be dragged by the globe
     unsafe {
-        let window = window.raw();
-        sdl3::sys::SDL_SetWindowHitTest(window, Some(hit_test_fn), std::ptr::null_mut());
+        sdl3_sys::video::SDL_SetWindowHitTest(window, Some(hit_test_fn), std::ptr::null_mut());
     }
 
-    let _sdl_gl_ctx = window.gl_create_context()?;
+    // initialize glow
     let gl = unsafe {
-        glow::Context::from_loader_function(|s| {
-            video
-                .gl_get_proc_address(s)
+        sdl3_sys::video::SDL_GL_CreateContext(window);
+        glow::Context::from_loader_function_cstr(|s| {
+            sdl3_sys::video::SDL_GL_GetProcAddress(s.as_ptr())
                 .map_or(std::ptr::null(), |p| p as *const _)
         })
     };
@@ -534,36 +532,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut niko = Niko::default();
     let mut state = State::Stopped;
 
-    let mut event_pump = sdl.event_pump()?;
-
     let mut last = Instant::now();
     let mut accum = Duration::ZERO;
 
-    let (mut last_window_x, mut last_window_y) = window.position();
+    let mut last_window_x = 0;
+    let mut last_window_y = 0;
+    unsafe {
+        sdl3_sys::video::SDL_GetWindowPosition(window, &mut last_window_x, &mut last_window_y);
+    }
 
     'el: loop {
-        for event in event_pump.poll_iter() {
-            match event {
-                Event::Quit { .. } => break 'el,
-                Event::KeyDown {
-                    keycode: Some(Keycode::Escape),
-                    ..
-                } => break 'el,
-                Event::Window {
-                    win_event: WindowEvent::Moved(new_x, new_y),
-                    ..
-                } => {
-                    let diff_x = last_window_x - new_x;
-                    let diff_y = last_window_y - new_y;
-                    last_window_x = new_x;
-                    last_window_y = new_y;
+        unsafe {
+            let mut event = std::mem::MaybeUninit::uninit();
+            while sdl3_sys::events::SDL_PollEvent(event.as_mut_ptr()) {
+                let event = event.assume_init_mut();
+                match sdl3_sys::events::SDL_EventType(event.r#type as i32) {
+                    sdl3_sys::events::SDL_EventType::QUIT => break 'el,
+                    sdl3_sys::events::SDL_EventType::KEY_DOWN => {
+                        let key = event.key.key;
+                        if key == sdl3_sys::keycode::SDLK_ESCAPE {
+                            break 'el;
+                        }
+                    }
+                    sdl3_sys::events::SDL_EventType::WINDOW_MOVED => {
+                        let new_x = event.window.data1;
+                        let new_y = event.window.data2;
+                        let diff_x = last_window_x - new_x;
+                        let diff_y = last_window_y - new_y;
+                        last_window_x = new_x;
+                        last_window_y = new_y;
 
-                    rigid_body_set[niko_body_handle].apply_impulse(
-                        vector![diff_x as f32, diff_y as f32] / PHYSICS_METER_PX,
-                        true,
-                    );
+                        rigid_body_set[niko_body_handle].apply_impulse(
+                            vector![diff_x as f32, diff_y as f32] / PHYSICS_METER_PX,
+                            true,
+                        );
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 
@@ -731,11 +736,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             draw_texture_at(&gl, glam::vec2(0.0, 0.0), 0.0, assets.globe.glass, &shader);
 
-            window.gl_swap_window();
+            sdl3_sys::video::SDL_GL_SwapWindow(window);
 
             std::thread::sleep(FRAME_DUR);
         }
     }
-
-    Ok(())
 }
