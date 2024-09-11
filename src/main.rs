@@ -424,12 +424,21 @@ fn draw_texture_at(
     texture: assets::Texture,
     shaders: &shaders::Shaders,
 ) {
+    let affine = glam::Affine2::from_scale_angle_translation(
+        glam::vec2(texture.width as f32, texture.height as f32),
+        angle,
+        pos,
+    );
+    draw_texture_affine(gl, affine, texture, shaders)
+}
+
+fn draw_texture_affine(
+    gl: &glow::Context,
+    affine: glam::Affine2,
+    texture: assets::Texture,
+    shaders: &shaders::Shaders,
+) {
     unsafe {
-        let affine = glam::Affine2::from_scale_angle_translation(
-            glam::vec2(texture.width as f32, texture.height as f32) * 2.0,
-            angle,
-            pos * 2.0,
-        );
         gl.uniform_matrix_2_f32_slice(
             Some(&shaders.program.u_matrix),
             false,
@@ -502,7 +511,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ccd_solver = CCDSolver::new();
 
     let window = video
-        .window("snowglobe ", 224 * 2, 248 * 2)
+        .window("snowglobe ", 224, 248)
         .set_window_flags(
             sdl3::sys::SDL_WindowFlags::SDL_WINDOW_TRANSPARENT as u32
                 | sdl3::sys::SDL_WindowFlags::SDL_WINDOW_ALWAYS_ON_TOP as u32,
