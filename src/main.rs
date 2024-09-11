@@ -519,7 +519,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         gl.enable(glow::BLEND);
         // alpha blending
-        gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+        gl.blend_func_separate(
+            glow::SRC_ALPHA,
+            glow::ONE_MINUS_SRC_ALPHA,
+            glow::ONE,
+            glow::ONE_MINUS_SRC_ALPHA,
+        );
     }
 
     let shader = shader::Shader::new(&gl);
