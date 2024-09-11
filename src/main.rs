@@ -511,7 +511,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ccd_solver = CCDSolver::new();
 
     let window = video
-        .window("snowglobe ", 224, 248)
+        .window("snowglobe ", 224 * 2, 248 * 2)
         .set_window_flags(
             sdl3::sys::SDL_WindowFlags::SDL_WINDOW_TRANSPARENT as u32
                 | sdl3::sys::SDL_WindowFlags::SDL_WINDOW_ALWAYS_ON_TOP as u32,
@@ -684,29 +684,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &shaders,
             );
 
-            // draw globe mask to stencil buffer
-
             let niko_top_left =
                 point![-NIKO_COLLIDER_WIDTH / 2.0, -NIKO_COLLIDER_HEIGHT / 2.0] / PHYSICS_METER_PX;
             let translated_niko_top_left = niko_position * niko_top_left * PHYSICS_METER_PX;
 
-            let [niko_ox, niko_oy] = niko.frame_offset();
-            let texture = niko.texture(&assets);
-            let pos = glam::vec2(
-                translated_niko_top_left.x - niko_ox,
-                translated_niko_top_left.y - niko_oy,
-            );
-            let angle = niko_position.rotation.angle();
-            draw_texture_at(&gl, pos, angle, texture, &shaders);
+            {
+                let texture = niko.texture(&assets);
+                let tex_size = glam::vec2(texture.width as f32, texture.height as f32);
 
-            let [face_ox, face_oy] = niko.face.offset_for(niko.frame);
-            let texture = niko.face.texture(&assets);
-            let pos = glam::vec2(
-                translated_niko_top_left.x - face_ox,
-                translated_niko_top_left.y - face_oy,
-            );
-            let angle = niko_position.rotation.angle();
-            draw_texture_at(&gl, pos, angle, texture, &shaders);
+                let [niko_ox, niko_oy] = niko.frame_offset();
+                let niko_offset = glam::vec2(niko_ox, niko_oy);
+                let niko_tex_position =
+                    glam::vec2(translated_niko_top_left.x, translated_niko_top_left.y)
+                        - niko_offset;
+                let niko_angle = niko_position.rotation.angle();
+                let rotation_pos = niko_offset;
+
+                let transform = glam::Affine2::from_translation(rotation_pos);
+                let transform = transform * glam::Affine2::from_angle(niko_angle);
+                let transform = transform * glam::Affine2::from_translation(-rotation_pos);
+
+                let transform = transform * glam::Affine2::from_scale(tex_size);
+                let transform = glam::Affine2::from_translation(niko_tex_position) * transform;
+
+                draw_texture_affine(&gl, transform, texture, &shaders);
+            }
+
+            {
+                let texture = niko.face.texture(&assets);
+                let tex_size = glam::vec2(texture.width as f32, texture.height as f32);
+
+                let [face_ox, face_oy] = niko.face.offset_for(niko.frame);
+                let face_offset = glam::vec2(face_ox, face_oy);
+                let face_tex_position =
+                    glam::vec2(translated_niko_top_left.x, translated_niko_top_left.y)
+                        - face_offset;
+                let face_angle = niko_position.rotation.angle();
+                let rotation_pos = face_offset;
+
+                let transform = glam::Affine2::from_translation(rotation_pos);
+                let transform = transform * glam::Affine2::from_angle(face_angle);
+                let transform = transform * glam::Affine2::from_translation(-rotation_pos);
+
+                let transform = transform * glam::Affine2::from_scale(tex_size);
+                let transform = glam::Affine2::from_translation(face_tex_position) * transform;
+
+                draw_texture_affine(&gl, transform, texture, &shaders);
+            }
 
             draw_texture_at(&gl, glam::vec2(0.0, 0.0), 0.0, assets.globe.glass, &shaders);
 
