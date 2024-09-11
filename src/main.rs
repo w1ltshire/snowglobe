@@ -1,8 +1,9 @@
+use glow::HasContext;
 use rapier2d::prelude::*;
 use sdl3::{
     event::{Event, WindowEvent},
     keyboard::Keycode,
-    render::{Canvas, FPoint, FRect, RenderTarget, Texture},
+    render::{FPoint, FRect},
 };
 use std::{
     ops::Mul,
@@ -13,6 +14,7 @@ mod raw_assets {
     pub mod globe {
         pub const GLASS: &[u8] = include_bytes!("assets/globe/glass.png");
         pub const STAND: &[u8] = include_bytes!("assets/globe/stand.png");
+        pub const MASK: &[u8] = include_bytes!("assets/globe/globe_mask.png");
     }
 
     pub mod niko {
@@ -45,78 +47,197 @@ mod raw_assets {
 }
 
 pub mod assets {
-    use sdl3::{
-        render::{Texture, TextureCreator},
-        surface::Surface,
-    };
+    use glow::HasContext;
 
     use crate::raw_assets;
 
-    pub struct Assets<'tex> {
-        pub globe: Globe<'tex>,
-        pub niko: Niko<'tex>,
+    #[derive(Debug, Clone, Copy)]
+    pub struct Texture {
+        pub raw: glow::NativeTexture,
+        pub width: u32,
+        pub height: u32,
     }
 
-    pub struct Globe<'tex> {
-        pub glass: Texture<'tex>,
-        pub stand: Texture<'tex>,
+    pub struct Assets {
+        pub globe: Globe,
+        pub niko: Niko,
     }
 
-    pub struct Niko<'tex> {
-        pub faces: Faces<'tex>,
-        pub frames: [Texture<'tex>; 16],
+    pub struct Globe {
+        pub glass: Texture,
+        pub stand: Texture,
+        pub mask: Texture,
     }
 
-    pub struct Faces<'tex> {
-        pub dizzy: Texture<'tex>,
-        pub happy: Texture<'tex>,
-        pub shook: Texture<'tex>,
+    pub struct Niko {
+        pub faces: Faces,
+        pub frames: [Texture; 16],
     }
 
-    fn sdl_texture_from_bytes<'tex, T>(
-        creator: &'tex TextureCreator<T>,
-        bytes: &'static [u8],
-    ) -> Texture<'tex> {
+    pub struct Faces {
+        pub dizzy: Texture,
+        pub happy: Texture,
+        pub shook: Texture,
+    }
+
+    fn texture_from_bytes(gl: &glow::Context, bytes: &'static [u8]) -> Texture {
         let image = image::load_from_memory(bytes).expect("invalid image");
-        let mut rgba_image = image.into_rgba8();
+        let rgba_image = image.into_rgba8();
         let width = rgba_image.width();
         let height = rgba_image.height();
 
-        let surface = Surface::from_data(
-            &mut rgba_image,
+        let texture = unsafe { gl.create_texture() }.expect("failed to create texture");
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA as i32,
+                width as i32,
+                height as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                Some(&rgba_image),
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::NEAREST as i32,
+            );
+        }
+
+        Texture {
+            raw: texture,
             width,
             height,
-            width * 4,
-            sdl3::pixels::PixelFormatEnum::ABGR8888,
-        )
-        .expect("failed to create surface");
-        surface
-            .as_texture(creator)
-            .expect("failed to convert texture to surface")
+        }
     }
 
-    impl<'tex> Assets<'tex> {
-        pub fn load<T>(creator: &'tex TextureCreator<T>) -> Self {
+    impl Assets {
+        pub fn load(gl: &glow::Context) -> Self {
             let globe = Globe {
-                glass: sdl_texture_from_bytes(creator, raw_assets::globe::GLASS),
-                stand: sdl_texture_from_bytes(creator, raw_assets::globe::STAND),
+                glass: texture_from_bytes(gl, raw_assets::globe::GLASS),
+                stand: texture_from_bytes(gl, raw_assets::globe::STAND),
+                mask: texture_from_bytes(gl, raw_assets::globe::MASK),
             };
 
             let faces = Faces {
-                dizzy: sdl_texture_from_bytes(creator, raw_assets::niko::faces::DIZZY),
-                happy: sdl_texture_from_bytes(creator, raw_assets::niko::faces::HAPPY),
-                shook: sdl_texture_from_bytes(creator, raw_assets::niko::faces::SHOOK),
+                dizzy: texture_from_bytes(gl, raw_assets::niko::faces::DIZZY),
+                happy: texture_from_bytes(gl, raw_assets::niko::faces::HAPPY),
+                shook: texture_from_bytes(gl, raw_assets::niko::faces::SHOOK),
             };
 
             let frames = std::array::from_fn(|i| {
                 // ideally we'd be able to use an iterator and map this, but rust doesnt have that yet
                 let frame = raw_assets::niko::FRAMES[i];
-                sdl_texture_from_bytes(creator, frame)
+                texture_from_bytes(gl, frame)
             });
 
             let niko = Niko { faces, frames };
 
             Assets { globe, niko }
+        }
+    }
+}
+
+pub mod shaders {
+    use glow::HasContext;
+
+    pub const VERTEX: &str = include_str!("shaders/basic.vert");
+    pub const FRAGMENT: &str = include_str!("shaders/basic.frag");
+    pub const STENCIL: &str = include_str!("shaders/stencil.frag");
+
+    pub struct Shaders {
+        pub program: Shader,
+        pub stencil_program: Shader,
+    }
+
+    // the (2) shaders we use have identical uniforms, so we can use the same struct for both
+    pub struct Shader {
+        pub program: glow::NativeProgram,
+
+        pub u_translation: glow::UniformLocation,
+        pub u_matrix: glow::UniformLocation,
+        pub u_texture: glow::UniformLocation,
+    }
+
+    fn create_shader_from(gl: &glow::Context, vert: &str, frag: &str) -> Shader {
+        let program = unsafe { gl.create_program() }.expect("failed to create program");
+
+        let vert_shader = unsafe { gl.create_shader(glow::VERTEX_SHADER) }
+            .expect("failed to create vertex shader");
+        unsafe {
+            gl.shader_source(vert_shader, vert);
+            gl.compile_shader(vert_shader);
+
+            if !gl.get_shader_compile_status(vert_shader) {
+                panic!(
+                    "failed to compile vertex shader: {}",
+                    gl.get_shader_info_log(vert_shader)
+                );
+            }
+
+            gl.attach_shader(program, vert_shader);
+        }
+
+        let frag_shader = unsafe { gl.create_shader(glow::FRAGMENT_SHADER) }
+            .expect("failed to create fragment shader");
+        unsafe {
+            gl.shader_source(frag_shader, frag);
+            gl.compile_shader(frag_shader);
+
+            if !gl.get_shader_compile_status(frag_shader) {
+                panic!(
+                    "failed to compile fragment shader: {}",
+                    gl.get_shader_info_log(frag_shader)
+                );
+            }
+
+            gl.attach_shader(program, frag_shader);
+        }
+
+        unsafe {
+            gl.link_program(program);
+
+            if !gl.get_program_link_status(program) {
+                panic!(
+                    "failed to link program: {}",
+                    gl.get_program_info_log(program)
+                );
+            }
+        }
+
+        let u_translation = unsafe { gl.get_uniform_location(program, "u_translation") }
+            .expect("failed to get uniform location");
+        let u_matrix = unsafe { gl.get_uniform_location(program, "u_matrix") }
+            .expect("failed to get uniform location");
+        let u_texture = unsafe { gl.get_uniform_location(program, "u_texture") }
+            .expect("failed to get uniform location");
+
+        Shader {
+            program,
+
+            u_translation,
+            u_matrix,
+            u_texture,
+        }
+    }
+
+    impl Shaders {
+        pub fn new(gl: &glow::Context) -> Self {
+            let program = create_shader_from(gl, VERTEX, FRAGMENT);
+            let stencil_program = create_shader_from(gl, VERTEX, STENCIL);
+
+            Shaders {
+                program,
+                stencil_program,
+            }
         }
     }
 }
@@ -161,8 +282,8 @@ impl Niko {
         Self::OFFSETS[self.frame]
     }
 
-    pub fn texture<'a, 'tex>(self, assets: &'a assets::Assets<'tex>) -> &'a Texture<'tex> {
-        &assets.niko.frames[self.frame]
+    pub fn texture(self, assets: &assets::Assets) -> assets::Texture {
+        assets.niko.frames[self.frame]
     }
 }
 
@@ -190,11 +311,11 @@ impl Face {
         Self::OFFSETS[frame]
     }
 
-    pub fn texture<'a, 'tex>(self, assets: &'a assets::Assets<'tex>) -> &'a Texture<'tex> {
+    pub fn texture(self, assets: &assets::Assets) -> assets::Texture {
         match self {
-            Self::Happy => &assets.niko.faces.happy,
-            Self::Dizzy => &assets.niko.faces.dizzy,
-            Self::Shook => &assets.niko.faces.shook,
+            Self::Happy => assets.niko.faces.happy,
+            Self::Dizzy => assets.niko.faces.dizzy,
+            Self::Shook => assets.niko.faces.shook,
         }
     }
 }
@@ -202,15 +323,6 @@ impl Face {
 const FRAME_DUR: Duration = Duration::from_millis(16);
 const ANIM_FRAME_DUR: Duration = Duration::from_millis(100);
 const PHYSICS_METER_PX: f32 = 100.0;
-
-fn draw_texture_at<T: RenderTarget>(offset: Offset, canvas: &mut Canvas<T>, texture: &Texture<'_>) {
-    let query = texture.query();
-    let src = FRect::new(0.0, 0.0, query.width as f32, query.height as f32);
-    let dst = FRect::new(offset[0], offset[1], src.w, src.h);
-    canvas
-        .copy(texture, src, dst)
-        .expect("failed to copy texture");
-}
 
 const NIKO_COLLIDER_WIDTH: f32 = 77.0;
 const NIKO_COLLIDER_HEIGHT: f32 = 144.0;
@@ -238,6 +350,103 @@ unsafe extern "C" fn hit_test_fn(
     _: *mut std::ffi::c_void,
 ) -> sdl3::sys::SDL_HitTestResult {
     sdl3::sys::SDL_HitTestResult::SDL_HITTEST_DRAGGABLE
+}
+
+fn create_vertex_buffer(gl: &glow::Context) -> glow::NativeVertexArray {
+    #[repr(C)]
+    #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+    struct Vertex {
+        position: [f32; 2],
+        tex_coords: [f32; 2],
+    }
+
+    // we just want a 1x1 square with full texture coords
+    const VERTICES: [Vertex; 6] = [
+        Vertex {
+            position: [0.0, 0.0],
+            tex_coords: [0.0, 0.0],
+        },
+        Vertex {
+            position: [1.0, 0.0],
+            tex_coords: [1.0, 0.0],
+        },
+        Vertex {
+            position: [1.0, 1.0],
+            tex_coords: [1.0, 1.0],
+        },
+        //
+        Vertex {
+            position: [0.0, 0.0],
+            tex_coords: [0.0, 0.0],
+        },
+        Vertex {
+            position: [1.0, 1.0],
+            tex_coords: [1.0, 1.0],
+        },
+        Vertex {
+            position: [0.0, 1.0],
+            tex_coords: [0.0, 1.0],
+        },
+    ];
+
+    unsafe {
+        let vao = gl
+            .create_vertex_array()
+            .expect("failed to create vertex array");
+        gl.bind_vertex_array(Some(vao));
+
+        let buffer = gl.create_buffer().expect("failed to create buffer");
+        gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+
+        let vertices = bytemuck::cast_slice(&VERTICES);
+        gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, vertices, glow::STATIC_DRAW);
+
+        let stride = std::mem::size_of::<Vertex>() as i32;
+        let position_offset = 0;
+        let tex_coords_offset = std::mem::size_of::<[f32; 2]>() as i32;
+
+        gl.enable_vertex_attrib_array(0);
+        gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, position_offset);
+
+        gl.enable_vertex_attrib_array(1);
+        gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, stride, tex_coords_offset);
+
+        gl.bind_vertex_array(None);
+        gl.bind_buffer(glow::ARRAY_BUFFER, None);
+
+        vao
+    }
+}
+
+fn draw_texture_at(
+    gl: &glow::Context,
+    pos: glam::Vec2,
+    angle: f32,
+    texture: assets::Texture,
+    shaders: &shaders::Shaders,
+) {
+    unsafe {
+        let affine = glam::Affine2::from_scale_angle_translation(
+            glam::vec2(texture.width as f32, texture.height as f32) * 2.0,
+            angle,
+            pos * 2.0,
+        );
+        gl.uniform_matrix_2_f32_slice(
+            Some(&shaders.program.u_matrix),
+            false,
+            affine.matrix2.as_ref(),
+        );
+        gl.uniform_2_f32_slice(
+            Some(&shaders.program.u_translation),
+            affine.translation.as_ref(),
+        );
+
+        gl.active_texture(glow::TEXTURE0);
+        gl.bind_texture(glow::TEXTURE_2D, Some(texture.raw));
+        gl.uniform_1_i32(Some(&shaders.program.u_texture), 0);
+
+        gl.draw_arrays(glow::TRIANGLES, 0, 6);
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -299,7 +508,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             sdl3::sys::SDL_WindowFlags::SDL_WINDOW_TRANSPARENT as u32
                 | sdl3::sys::SDL_WindowFlags::SDL_WINDOW_ALWAYS_ON_TOP as u32,
         )
-        .borderless()
+        //.borderless()
+        .opengl()
         .build()?;
 
     // set the hit test to allow the window to be dragged by the globe
@@ -308,12 +518,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sdl3::sys::SDL_SetWindowHitTest(window, Some(hit_test_fn), std::ptr::null_mut());
     }
 
-    let mut canvas = window.into_canvas().present_vsync().build()?;
-    canvas.set_scale(2.0, 2.0)?;
+    let _sdl_gl_ctx = window.gl_create_context()?;
+    let gl = unsafe {
+        glow::Context::from_loader_function(|s| {
+            video
+                .gl_get_proc_address(s)
+                .map_or(std::ptr::null(), |p| p as *const _)
+        })
+    };
+    unsafe {
+        gl.enable(glow::STENCIL_TEST);
+        gl.stencil_func(glow::ALWAYS, 1, 0xFF);
 
-    let texture_creator = canvas.texture_creator();
+        gl.enable(glow::BLEND);
+        // alpha blending
+        gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+    }
 
-    let assets = assets::Assets::load(&texture_creator);
+    let shaders = shaders::Shaders::new(&gl);
+    let assets = assets::Assets::load(&gl);
+    let vertex_array = create_vertex_buffer(&gl);
+
     let mut niko = Niko::default();
     let mut state = State::Stopped;
 
@@ -322,7 +547,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last = Instant::now();
     let mut accum = Duration::ZERO;
 
-    let (mut last_window_x, mut last_window_y) = canvas.window().position();
+    let (mut last_window_x, mut last_window_y) = window.position();
 
     'el: loop {
         for event in event_pump.poll_iter() {
@@ -435,75 +660,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        canvas.set_draw_color(sdl3::pixels::Color::RGBA(0, 0, 0, 0));
-        canvas.clear();
+        unsafe {
+            gl.clear_color(0.0, 0.0, 0.0, 0.0);
+            gl.clear(glow::COLOR_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
 
-        draw_texture_at([24.0, 166.0], &mut canvas, &assets.globe.stand);
+            gl.use_program(Some(shaders.program.program));
+            gl.bind_vertex_array(Some(vertex_array));
 
-        #[cfg(debug_assertions)]
-        {
-            canvas.set_draw_color(sdl3::pixels::Color::RGBA(255, 0, 0, 128));
-            // draw a rotated debug rect of niko
-            let points = [
-                // top
-                point![-NIKO_COLLIDER_WIDTH / 2.0, -NIKO_COLLIDER_HEIGHT / 2.0] / PHYSICS_METER_PX,
-                point![NIKO_COLLIDER_WIDTH / 2.0, -NIKO_COLLIDER_HEIGHT / 2.0] / PHYSICS_METER_PX,
-                // right
-                point![NIKO_COLLIDER_WIDTH / 2.0, -NIKO_COLLIDER_HEIGHT / 2.0] / PHYSICS_METER_PX,
-                point![NIKO_COLLIDER_WIDTH / 2.0, NIKO_COLLIDER_HEIGHT / 2.0] / PHYSICS_METER_PX,
-                // bottom
-                point![NIKO_COLLIDER_WIDTH / 2.0, NIKO_COLLIDER_HEIGHT / 2.0] / PHYSICS_METER_PX,
-                point![-NIKO_COLLIDER_WIDTH / 2.0, NIKO_COLLIDER_HEIGHT / 2.0] / PHYSICS_METER_PX,
-                // left
-                point![-NIKO_COLLIDER_WIDTH / 2.0, NIKO_COLLIDER_HEIGHT / 2.0] / PHYSICS_METER_PX,
-                point![-NIKO_COLLIDER_WIDTH / 2.0, -NIKO_COLLIDER_HEIGHT / 2.0] / PHYSICS_METER_PX,
-            ];
-            let points: [FPoint; 8] = std::array::from_fn(|i| {
-                let point = niko_position * points[i] * PHYSICS_METER_PX;
-                FPoint::new(point.x, point.y)
-            });
-            canvas.draw_lines(points.as_slice())?;
+            // draw stand
+            draw_texture_at(
+                &gl,
+                glam::vec2(24.0, 166.0),
+                0.0,
+                assets.globe.stand,
+                &shaders,
+            );
+
+            // draw globe mask to stencil buffer
+
+            let niko_top_left =
+                point![-NIKO_COLLIDER_WIDTH / 2.0, -NIKO_COLLIDER_HEIGHT / 2.0] / PHYSICS_METER_PX;
+            let translated_niko_top_left = niko_position * niko_top_left * PHYSICS_METER_PX;
+
+            let [niko_ox, niko_oy] = niko.frame_offset();
+            let texture = niko.texture(&assets);
+            let pos = glam::vec2(
+                translated_niko_top_left.x - niko_ox,
+                translated_niko_top_left.y - niko_oy,
+            );
+            let angle = niko_position.rotation.angle();
+            draw_texture_at(&gl, pos, angle, texture, &shaders);
+
+            let [face_ox, face_oy] = niko.face.offset_for(niko.frame);
+            let texture = niko.face.texture(&assets);
+            let pos = glam::vec2(
+                translated_niko_top_left.x - face_ox,
+                translated_niko_top_left.y - face_oy,
+            );
+            let angle = niko_position.rotation.angle();
+            draw_texture_at(&gl, pos, angle, texture, &shaders);
+
+            draw_texture_at(&gl, glam::vec2(0.0, 0.0), 0.0, assets.globe.glass, &shaders);
+
+            window.gl_swap_window();
+
+            std::thread::sleep(FRAME_DUR);
         }
-
-        let niko_top_left =
-            point![-NIKO_COLLIDER_WIDTH / 2.0, -NIKO_COLLIDER_HEIGHT / 2.0] / PHYSICS_METER_PX;
-        let translated_niko_top_left = niko_position * niko_top_left * PHYSICS_METER_PX;
-
-        let [niko_ox, niko_oy] = niko.frame_offset();
-        let texture = niko.texture(&assets);
-        let query = texture.query();
-
-        let dst = FRect::new(
-            translated_niko_top_left.x - niko_ox,
-            translated_niko_top_left.y - niko_oy,
-            query.width as f32,
-            query.height as f32,
-        );
-        let angle = niko_position.rotation.angle().to_degrees();
-        let center = FPoint::new(niko_ox, niko_oy);
-
-        canvas.copy_ex(texture, None, dst, angle as f64, Some(center), false, false)?;
-
-        let [face_ox, face_oy] = niko.face.offset_for(niko.frame);
-        let texture = niko.face.texture(&assets);
-        let query = texture.query();
-
-        let dst = FRect::new(
-            translated_niko_top_left.x - face_ox,
-            translated_niko_top_left.y - face_oy,
-            query.width as f32,
-            query.height as f32,
-        );
-        let angle = niko_position.rotation.angle().to_degrees();
-        let center = FPoint::new(face_ox, face_oy);
-
-        canvas.copy_ex(texture, None, dst, angle as f64, Some(center), false, false)?;
-
-        draw_texture_at([0.0, 0.0], &mut canvas, &assets.globe.glass);
-
-        canvas.present();
-
-        std::thread::sleep(FRAME_DUR);
     }
 
     Ok(())
