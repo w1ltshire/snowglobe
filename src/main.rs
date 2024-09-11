@@ -3,7 +3,6 @@ use rapier2d::prelude::*;
 use sdl3::{
     event::{Event, WindowEvent},
     keyboard::Keycode,
-    render::{FPoint, FRect},
 };
 use std::{
     ops::Mul,
