@@ -42,7 +42,7 @@ fn compile_sdl3(sdl3_build_path: &Path, target_os: &str) -> PathBuf {
 
 fn link_sdl3(target_os: &str) {
     {
-        if target_os.contains("windows") {
+        if target_os.contains("windows") && !target_os.contains("windows-gnu") {
             println!("cargo:rustc-link-lib=static=SDL3-static");
         } else {
             println!("cargo:rustc-link-lib=static=SDL3");
