@@ -2,6 +2,7 @@
 name = "snowglobe"
 version = "0.1.0"
 edition = "2021"
+build = "build.rs"
 
 [dependencies]
 bytemuck = { version = "1.18.0", features = ["derive"] }
@@ -10,3 +11,6 @@ glow = "0.14.0"
 image = "0.25.2"
 rapier2d = "0.22.0"
 sdl3-sys = "0.0.9"
+
+[build-dependencies]
+cmake = "0.1.51"
