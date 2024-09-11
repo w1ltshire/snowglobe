@@ -145,19 +145,12 @@ pub mod assets {
     }
 }
 
-pub mod shaders {
+pub mod shader {
     use glow::HasContext;
 
     pub const VERTEX: &str = include_str!("shaders/basic.vert");
     pub const FRAGMENT: &str = include_str!("shaders/basic.frag");
-    pub const STENCIL: &str = include_str!("shaders/stencil.frag");
 
-    pub struct Shaders {
-        pub program: Shader,
-        pub stencil_program: Shader,
-    }
-
-    // the (2) shaders we use have identical uniforms, so we can use the same struct for both
     pub struct Shader {
         pub program: glow::NativeProgram,
 
@@ -166,76 +159,66 @@ pub mod shaders {
         pub u_texture: glow::UniformLocation,
     }
 
-    fn create_shader_from(gl: &glow::Context, vert: &str, frag: &str) -> Shader {
-        let program = unsafe { gl.create_program() }.expect("failed to create program");
+    impl Shader {
+        pub fn new(gl: &glow::Context) -> Shader {
+            let program = unsafe { gl.create_program() }.expect("failed to create program");
 
-        let vert_shader = unsafe { gl.create_shader(glow::VERTEX_SHADER) }
-            .expect("failed to create vertex shader");
-        unsafe {
-            gl.shader_source(vert_shader, vert);
-            gl.compile_shader(vert_shader);
+            let vert_shader = unsafe { gl.create_shader(glow::VERTEX_SHADER) }
+                .expect("failed to create vertex shader");
+            unsafe {
+                gl.shader_source(vert_shader, VERTEX);
+                gl.compile_shader(vert_shader);
 
-            if !gl.get_shader_compile_status(vert_shader) {
-                panic!(
-                    "failed to compile vertex shader: {}",
-                    gl.get_shader_info_log(vert_shader)
-                );
+                if !gl.get_shader_compile_status(vert_shader) {
+                    panic!(
+                        "failed to compile vertex shader: {}",
+                        gl.get_shader_info_log(vert_shader)
+                    );
+                }
+
+                gl.attach_shader(program, vert_shader);
             }
 
-            gl.attach_shader(program, vert_shader);
-        }
+            let frag_shader = unsafe { gl.create_shader(glow::FRAGMENT_SHADER) }
+                .expect("failed to create fragment shader");
+            unsafe {
+                gl.shader_source(frag_shader, FRAGMENT);
+                gl.compile_shader(frag_shader);
 
-        let frag_shader = unsafe { gl.create_shader(glow::FRAGMENT_SHADER) }
-            .expect("failed to create fragment shader");
-        unsafe {
-            gl.shader_source(frag_shader, frag);
-            gl.compile_shader(frag_shader);
+                if !gl.get_shader_compile_status(frag_shader) {
+                    panic!(
+                        "failed to compile fragment shader: {}",
+                        gl.get_shader_info_log(frag_shader)
+                    );
+                }
 
-            if !gl.get_shader_compile_status(frag_shader) {
-                panic!(
-                    "failed to compile fragment shader: {}",
-                    gl.get_shader_info_log(frag_shader)
-                );
+                gl.attach_shader(program, frag_shader);
             }
 
-            gl.attach_shader(program, frag_shader);
-        }
+            unsafe {
+                gl.link_program(program);
 
-        unsafe {
-            gl.link_program(program);
-
-            if !gl.get_program_link_status(program) {
-                panic!(
-                    "failed to link program: {}",
-                    gl.get_program_info_log(program)
-                );
+                if !gl.get_program_link_status(program) {
+                    panic!(
+                        "failed to link program: {}",
+                        gl.get_program_info_log(program)
+                    );
+                }
             }
-        }
 
-        let u_translation = unsafe { gl.get_uniform_location(program, "u_translation") }
-            .expect("failed to get uniform location");
-        let u_matrix = unsafe { gl.get_uniform_location(program, "u_matrix") }
-            .expect("failed to get uniform location");
-        let u_texture = unsafe { gl.get_uniform_location(program, "u_texture") }
-            .expect("failed to get uniform location");
+            let u_translation = unsafe { gl.get_uniform_location(program, "u_translation") }
+                .expect("failed to get uniform location");
+            let u_matrix = unsafe { gl.get_uniform_location(program, "u_matrix") }
+                .expect("failed to get uniform location");
+            let u_texture = unsafe { gl.get_uniform_location(program, "u_texture") }
+                .expect("failed to get uniform location");
 
-        Shader {
-            program,
-
-            u_translation,
-            u_matrix,
-            u_texture,
-        }
-    }
-
-    impl Shaders {
-        pub fn new(gl: &glow::Context) -> Self {
-            let program = create_shader_from(gl, VERTEX, FRAGMENT);
-            let stencil_program = create_shader_from(gl, VERTEX, STENCIL);
-
-            Shaders {
+            Shader {
                 program,
-                stencil_program,
+
+                u_translation,
+                u_matrix,
+                u_texture,
             }
         }
     }
@@ -422,36 +405,29 @@ fn draw_texture_at(
     pos: glam::Vec2,
     angle: f32,
     texture: assets::Texture,
-    shaders: &shaders::Shaders,
+    shader: &shader::Shader,
 ) {
     let affine = glam::Affine2::from_scale_angle_translation(
         glam::vec2(texture.width as f32, texture.height as f32),
         angle,
         pos,
     );
-    draw_texture_affine(gl, affine, texture, shaders)
+    draw_texture_affine(gl, affine, texture, shader)
 }
 
 fn draw_texture_affine(
     gl: &glow::Context,
     affine: glam::Affine2,
     texture: assets::Texture,
-    shaders: &shaders::Shaders,
+    shader: &shader::Shader,
 ) {
     unsafe {
-        gl.uniform_matrix_2_f32_slice(
-            Some(&shaders.program.u_matrix),
-            false,
-            affine.matrix2.as_ref(),
-        );
-        gl.uniform_2_f32_slice(
-            Some(&shaders.program.u_translation),
-            affine.translation.as_ref(),
-        );
+        gl.uniform_matrix_2_f32_slice(Some(&shader.u_matrix), false, affine.matrix2.as_ref());
+        gl.uniform_2_f32_slice(Some(&shader.u_translation), affine.translation.as_ref());
 
         gl.active_texture(glow::TEXTURE0);
         gl.bind_texture(glow::TEXTURE_2D, Some(texture.raw));
-        gl.uniform_1_i32(Some(&shaders.program.u_texture), 0);
+        gl.uniform_1_i32(Some(&shader.u_texture), 0);
 
         gl.draw_arrays(glow::TRIANGLES, 0, 6);
     }
@@ -510,13 +486,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut multibody_joint_set = MultibodyJointSet::new();
     let mut ccd_solver = CCDSolver::new();
 
+    video.gl_attr().set_stencil_size(1);
+
     let window = video
         .window("snowglobe ", 224 * 2, 248 * 2)
         .set_window_flags(
             sdl3::sys::SDL_WindowFlags::SDL_WINDOW_TRANSPARENT as u32
                 | sdl3::sys::SDL_WindowFlags::SDL_WINDOW_ALWAYS_ON_TOP as u32,
         )
-        //.borderless()
+        .borderless()
         .opengl()
         .build()?;
 
@@ -536,14 +514,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     unsafe {
         gl.enable(glow::STENCIL_TEST);
-        gl.stencil_func(glow::ALWAYS, 1, 0xFF);
+        gl.stencil_func(glow::NOTEQUAL, 1, 0xFF);
+        gl.stencil_op(glow::KEEP, glow::KEEP, glow::REPLACE);
 
         gl.enable(glow::BLEND);
         // alpha blending
         gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
     }
 
-    let shaders = shaders::Shaders::new(&gl);
+    let shader = shader::Shader::new(&gl);
     let assets = assets::Assets::load(&gl);
     let vertex_array = create_vertex_buffer(&gl);
 
@@ -672,17 +651,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             gl.clear_color(0.0, 0.0, 0.0, 0.0);
             gl.clear(glow::COLOR_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
 
-            gl.use_program(Some(shaders.program.program));
+            gl.use_program(Some(shader.program));
             gl.bind_vertex_array(Some(vertex_array));
 
+            // don't write stand to the stencil buffer
+            gl.stencil_func(glow::ALWAYS, 1, 0xFF);
+            gl.stencil_mask(0x00);
             // draw stand
             draw_texture_at(
                 &gl,
                 glam::vec2(24.0, 166.0),
                 0.0,
                 assets.globe.stand,
-                &shaders,
+                &shader,
             );
+
+            // draw globe mask into stencil buffer
+
+            gl.stencil_func(glow::ALWAYS, 1, 0xFF);
+            gl.stencil_mask(0xFF);
+            draw_texture_at(&gl, glam::vec2(0.0, 0.0), 0.0, assets.globe.mask, &shader);
+
+            // draw niko, ensuring that they are clipped by the stencil buffer
+            gl.stencil_func(glow::EQUAL, 1, 0xFF);
+            gl.stencil_mask(0x00);
 
             let niko_top_left =
                 point![-NIKO_COLLIDER_WIDTH / 2.0, -NIKO_COLLIDER_HEIGHT / 2.0] / PHYSICS_METER_PX;
@@ -707,7 +699,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let transform = transform * glam::Affine2::from_scale(tex_size);
                 let transform = glam::Affine2::from_translation(niko_tex_position) * transform;
 
-                draw_texture_affine(&gl, transform, texture, &shaders);
+                draw_texture_affine(&gl, transform, texture, &shader);
             }
 
             {
@@ -729,10 +721,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let transform = transform * glam::Affine2::from_scale(tex_size);
                 let transform = glam::Affine2::from_translation(face_tex_position) * transform;
 
-                draw_texture_affine(&gl, transform, texture, &shaders);
+                draw_texture_affine(&gl, transform, texture, &shader);
             }
 
-            draw_texture_at(&gl, glam::vec2(0.0, 0.0), 0.0, assets.globe.glass, &shaders);
+            draw_texture_at(&gl, glam::vec2(0.0, 0.0), 0.0, assets.globe.glass, &shader);
 
             window.gl_swap_window();
 
