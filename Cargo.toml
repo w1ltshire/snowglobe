@@ -14,3 +14,4 @@ sdl3-sys = "0.0.9"
 
 [build-dependencies]
 cmake = "0.1.51"
+cc = "1.1.18"

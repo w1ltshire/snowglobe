@@ -1112,6 +1112,7 @@ name = "snowglobe"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "cc",
  "cmake",
  "glam",
  "glow",

@@ -1,9 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![allow(clippy::not_unsafe_ptr_arg_deref)] // we have functions that are marked as pub, but are only used in C
+#![no_main] // this is still a binary crate, but sdl is providing main for us
 
 use glow::HasContext;
 use rapier2d::prelude::*;
 
 use std::{
+    ffi::{c_char, c_int, c_void},
     ops::Mul,
     time::{Duration, Instant},
 };
@@ -432,7 +435,45 @@ fn draw_texture_affine(
     }
 }
 
-fn main() {
+struct App {
+    window: *mut sdl3_sys::video::SDL_Window,
+    last_window_x: i32,
+    last_window_y: i32,
+    gl: glow::Context,
+
+    shader: shader::Shader,
+    assets: assets::Assets,
+
+    vertex_array: glow::NativeVertexArray,
+
+    niko: Niko,
+    state: State,
+
+    last: Instant,
+    accum: Duration,
+
+    integration_parameters: IntegrationParameters,
+    physics_pipeline: PhysicsPipeline,
+    island_manager: IslandManager,
+    broad_phase: DefaultBroadPhase,
+    narrow_phase: NarrowPhase,
+    impulse_joint_set: ImpulseJointSet,
+    multibody_joint_set: MultibodyJointSet,
+    rigid_body_set: RigidBodySet,
+    collider_set: ColliderSet,
+    ccd_solver: CCDSolver,
+
+    niko_body_handle: RigidBodyHandle,
+}
+
+// i love smuggling pointers across FFI boundaries
+// y...yayyyyyyy....
+#[no_mangle]
+pub extern "C" fn SDL_AppInit(
+    appstate: *mut *mut c_void,
+    _argc: c_int,
+    _argv: *mut *mut c_char,
+) -> sdl3_sys::init::SDL_AppResult {
     unsafe {
         sdl3_sys::init::SDL_Init(sdl3_sys::init::SDL_INIT_VIDEO | sdl3_sys::init::SDL_INIT_EVENTS)
     };
@@ -476,15 +517,14 @@ fn main() {
     .build();
     collider_set.insert_with_parent(niko_collider, niko_body_handle, &mut rigid_body_set);
 
-    let gravity = vector![0.0, 0.0];
     let integration_parameters = IntegrationParameters::default();
-    let mut physics_pipeline = PhysicsPipeline::new();
-    let mut island_manager = IslandManager::new();
-    let mut broad_phase = DefaultBroadPhase::new();
-    let mut narrow_phase = NarrowPhase::new();
-    let mut impulse_joint_set = ImpulseJointSet::new();
-    let mut multibody_joint_set = MultibodyJointSet::new();
-    let mut ccd_solver = CCDSolver::new();
+    let physics_pipeline = PhysicsPipeline::new();
+    let island_manager = IslandManager::new();
+    let broad_phase = DefaultBroadPhase::new();
+    let narrow_phase = NarrowPhase::new();
+    let impulse_joint_set = ImpulseJointSet::new();
+    let multibody_joint_set = MultibodyJointSet::new();
+    let ccd_solver = CCDSolver::new();
 
     let window = unsafe {
         sdl3_sys::video::SDL_GL_SetAttribute(sdl3_sys::video::SDL_GLattr::STENCIL_SIZE, 1);
@@ -531,11 +571,11 @@ fn main() {
     let assets = assets::Assets::load(&gl);
     let vertex_array = create_vertex_buffer(&gl);
 
-    let mut niko = Niko::default();
-    let mut state = State::Stopped;
+    let niko = Niko::default();
+    let state = State::Stopped;
 
-    let mut last = Instant::now();
-    let mut accum = Duration::ZERO;
+    let last = Instant::now();
+    let accum = Duration::ZERO;
 
     let mut last_window_x = 0;
     let mut last_window_y = 0;
@@ -543,204 +583,287 @@ fn main() {
         sdl3_sys::video::SDL_GetWindowPosition(window, &mut last_window_x, &mut last_window_y);
     }
 
-    'el: loop {
-        unsafe {
-            let mut event = std::mem::MaybeUninit::uninit();
-            while sdl3_sys::events::SDL_PollEvent(event.as_mut_ptr()) {
-                let event = event.assume_init_mut();
-                match sdl3_sys::events::SDL_EventType(event.r#type as i32) {
-                    sdl3_sys::events::SDL_EventType::QUIT => break 'el,
-                    sdl3_sys::events::SDL_EventType::KEY_DOWN => {
-                        let key = event.key.key;
-                        if key == sdl3_sys::keycode::SDLK_ESCAPE {
-                            break 'el;
-                        }
-                    }
-                    sdl3_sys::events::SDL_EventType::WINDOW_MOVED => {
-                        let new_x = event.window.data1;
-                        let new_y = event.window.data2;
-                        let diff_x = last_window_x - new_x;
-                        let diff_y = last_window_y - new_y;
-                        last_window_x = new_x;
-                        last_window_y = new_y;
+    let app = App {
+        window,
+        last_window_x,
+        last_window_y,
 
-                        rigid_body_set[niko_body_handle].apply_impulse(
-                            vector![diff_x as f32, diff_y as f32] / PHYSICS_METER_PX,
-                            true,
-                        );
-                    }
-                    _ => {}
-                }
+        gl,
+
+        shader,
+        assets,
+        vertex_array,
+
+        niko,
+        state,
+
+        last,
+        accum,
+
+        integration_parameters,
+        physics_pipeline,
+        island_manager,
+        broad_phase,
+        narrow_phase,
+        impulse_joint_set,
+        multibody_joint_set,
+        rigid_body_set,
+        collider_set,
+        ccd_solver,
+
+        niko_body_handle,
+    };
+    let app = Box::new(app);
+    let app = Box::into_raw(app);
+
+    unsafe {
+        *appstate = app.cast::<c_void>();
+    }
+
+    sdl3_sys::init::SDL_AppResult::CONTINUE
+}
+// statically assert SDL_AppInit has the right signature
+#[allow(dead_code)]
+const _: sdl3_sys::init::SDL_AppInit_func = Some(SDL_AppInit);
+
+#[no_mangle]
+pub extern "C" fn SDL_AppIterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResult {
+    let app = unsafe { &mut *appstate.cast::<App>() };
+
+    let now = Instant::now();
+    let delta = now.duration_since(app.last);
+    app.accum += delta;
+    app.last = now;
+
+    app.physics_pipeline.step(
+        &vector![0.0, 0.0],
+        &app.integration_parameters,
+        &mut app.island_manager,
+        &mut app.broad_phase,
+        &mut app.narrow_phase,
+        &mut app.rigid_body_set,
+        &mut app.collider_set,
+        &mut app.impulse_joint_set,
+        &mut app.multibody_joint_set,
+        &mut app.ccd_solver,
+        None,
+        &(),
+        &(),
+    );
+
+    let niko_body = &mut app.rigid_body_set[app.niko_body_handle];
+    let niko_position = *niko_body.position();
+
+    // speed up animation based on velocity
+    let anim_velocity = niko_body.linvel().norm().mul(3.0).max(1.0);
+    let frame_dur = ANIM_FRAME_DUR.div_f32(anim_velocity);
+    if app.accum >= frame_dur {
+        app.niko.frame += 1;
+        if app.niko.frame >= 16 {
+            app.niko.frame = 0;
+        }
+        app.accum = Duration::ZERO;
+    }
+
+    let niko_moving = niko_body.linvel().norm() > 0.01;
+    // if niko is moving, no matter what state they were in, set state to moving
+    if niko_moving && !matches!(app.state, State::Moving { .. }) {
+        app.state = State::Moving { max_velocity: 0.0 };
+    }
+
+    match app.state {
+        // Nothing is really happening, so set Niko's state to Happy
+        State::Stopped => app.niko.face = Face::Happy,
+        State::Moving {
+            ref mut max_velocity,
+        } => {
+            if *max_velocity > 0.5 {
+                app.niko.face = Face::Shook;
+            } else {
+                app.niko.face = Face::Happy;
+            }
+
+            let velocity = niko_body.linvel().norm();
+            if velocity > *max_velocity {
+                *max_velocity = velocity;
+            }
+
+            // looks like Niko isn't not moving anymore, so set state to JustStopped
+            if !niko_moving {
+                app.state = State::JustStopped {
+                    cooldown: UPRIGHT_COOLDOWN,
+                    max_velocity: *max_velocity,
+                };
             }
         }
+        State::JustStopped {
+            ref mut cooldown,
+            max_velocity,
+        } => {
+            if max_velocity > 10.0 {
+                app.niko.face = Face::Dizzy;
+            } else if max_velocity > 0.5 {
+                app.niko.face = Face::Shook;
+            } else {
+                app.niko.face = Face::Happy;
+            }
+            *cooldown = cooldown.saturating_sub(delta);
+            if *cooldown == Duration::ZERO {
+                app.state = State::Stopped;
+                niko_body.set_rotation(Default::default(), false);
+            }
+        }
+    }
 
-        let now = Instant::now();
-        let delta = now.duration_since(last);
-        accum += delta;
-        last = now;
+    unsafe {
+        app.gl.clear_color(0.0, 0.0, 0.0, 0.0);
+        app.gl
+            .clear(glow::COLOR_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
 
-        physics_pipeline.step(
-            &gravity,
-            &integration_parameters,
-            &mut island_manager,
-            &mut broad_phase,
-            &mut narrow_phase,
-            &mut rigid_body_set,
-            &mut collider_set,
-            &mut impulse_joint_set,
-            &mut multibody_joint_set,
-            &mut ccd_solver,
-            None,
-            &(),
-            &(),
+        app.gl.use_program(Some(app.shader.program));
+        app.gl.bind_vertex_array(Some(app.vertex_array));
+
+        // don't write stand to the stencil buffer
+        app.gl.stencil_func(glow::ALWAYS, 1, 0xFF);
+        app.gl.stencil_mask(0x00);
+        // draw stand
+        draw_texture_at(
+            &app.gl,
+            glam::vec2(24.0, 166.0),
+            0.0,
+            app.assets.globe.stand,
+            &app.shader,
         );
 
-        let niko_body = &mut rigid_body_set[niko_body_handle];
-        let niko_position = *niko_body.position();
+        // draw globe mask into stencil buffer
 
-        // speed up animation based on velocity
-        let anim_velocity = niko_body.linvel().norm().mul(3.0).max(1.0);
-        let frame_dur = ANIM_FRAME_DUR.div_f32(anim_velocity);
-        if accum >= frame_dur {
-            niko.frame += 1;
-            if niko.frame >= 16 {
-                niko.frame = 0;
-            }
-            accum = Duration::ZERO;
+        app.gl.stencil_func(glow::ALWAYS, 1, 0xFF);
+        app.gl.stencil_mask(0xFF);
+        draw_texture_at(
+            &app.gl,
+            glam::vec2(0.0, 0.0),
+            0.0,
+            app.assets.globe.mask,
+            &app.shader,
+        );
+
+        // draw niko, ensuring that they are clipped by the stencil buffer
+        app.gl.stencil_func(glow::EQUAL, 1, 0xFF);
+        app.gl.stencil_mask(0x00);
+
+        let niko_top_left =
+            point![-NIKO_COLLIDER_WIDTH / 2.0, -NIKO_COLLIDER_HEIGHT / 2.0] / PHYSICS_METER_PX;
+        let translated_niko_top_left = niko_position * niko_top_left * PHYSICS_METER_PX;
+
+        {
+            let texture = app.niko.texture(&app.assets);
+            let tex_size = glam::vec2(texture.width as f32, texture.height as f32);
+
+            let [niko_ox, niko_oy] = app.niko.frame_offset();
+            let niko_offset = glam::vec2(niko_ox, niko_oy);
+            let niko_tex_position =
+                glam::vec2(translated_niko_top_left.x, translated_niko_top_left.y) - niko_offset;
+            let niko_angle = niko_position.rotation.angle();
+            let rotation_pos = niko_offset;
+
+            let transform = glam::Affine2::from_translation(rotation_pos);
+            let transform = transform * glam::Affine2::from_angle(niko_angle);
+            let transform = transform * glam::Affine2::from_translation(-rotation_pos);
+
+            let transform = transform * glam::Affine2::from_scale(tex_size);
+            let transform = glam::Affine2::from_translation(niko_tex_position) * transform;
+
+            draw_texture_affine(&app.gl, transform, texture, &app.shader);
         }
 
-        let niko_moving = niko_body.linvel().norm() > 0.01;
-        // if niko is moving, no matter what state they were in, set state to moving
-        if niko_moving && !matches!(state, State::Moving { .. }) {
-            state = State::Moving { max_velocity: 0.0 };
+        {
+            let texture = app.niko.face.texture(&app.assets);
+            let tex_size = glam::vec2(texture.width as f32, texture.height as f32);
+
+            let [face_ox, face_oy] = app.niko.face.offset_for(app.niko.frame);
+            let face_offset = glam::vec2(face_ox, face_oy);
+            let face_tex_position =
+                glam::vec2(translated_niko_top_left.x, translated_niko_top_left.y) - face_offset;
+            let face_angle = niko_position.rotation.angle();
+            let rotation_pos = face_offset;
+
+            let transform = glam::Affine2::from_translation(rotation_pos);
+            let transform = transform * glam::Affine2::from_angle(face_angle);
+            let transform = transform * glam::Affine2::from_translation(-rotation_pos);
+
+            let transform = transform * glam::Affine2::from_scale(tex_size);
+            let transform = glam::Affine2::from_translation(face_tex_position) * transform;
+
+            draw_texture_affine(&app.gl, transform, texture, &app.shader);
         }
 
-        match state {
-            // Nothing is really happening, so set Niko's state to Happy
-            State::Stopped => niko.face = Face::Happy,
-            State::Moving {
-                ref mut max_velocity,
-            } => {
-                if *max_velocity > 0.5 {
-                    niko.face = Face::Shook;
+        draw_texture_at(
+            &app.gl,
+            glam::vec2(0.0, 0.0),
+            0.0,
+            app.assets.globe.glass,
+            &app.shader,
+        );
+
+        sdl3_sys::video::SDL_GL_SwapWindow(app.window);
+
+        std::thread::sleep(FRAME_DUR);
+    }
+
+    sdl3_sys::init::SDL_AppResult::CONTINUE
+}
+// statically assert SDL_AppIterate has the right signature
+#[allow(dead_code)]
+const _: sdl3_sys::init::SDL_AppIterate_func = Some(SDL_AppIterate);
+
+#[no_mangle]
+pub extern "C" fn SDL_AppEvent(
+    appstate: *mut c_void,
+    event: *mut sdl3_sys::events::SDL_Event,
+) -> sdl3_sys::init::SDL_AppResult {
+    unsafe {
+        let state = &mut *appstate.cast::<App>();
+        let event = *event;
+        match sdl3_sys::events::SDL_EventType(event.r#type as i32) {
+            sdl3_sys::events::SDL_EventType::QUIT => sdl3_sys::init::SDL_AppResult::FAILURE,
+            sdl3_sys::events::SDL_EventType::KEY_DOWN => {
+                let key = event.key.key;
+                if key == sdl3_sys::keycode::SDLK_ESCAPE {
+                    sdl3_sys::init::SDL_AppResult::FAILURE
                 } else {
-                    niko.face = Face::Happy;
-                }
-
-                let velocity = niko_body.linvel().norm();
-                if velocity > *max_velocity {
-                    *max_velocity = velocity;
-                }
-
-                // looks like Niko isn't not moving anymore, so set state to JustStopped
-                if !niko_moving {
-                    state = State::JustStopped {
-                        cooldown: UPRIGHT_COOLDOWN,
-                        max_velocity: *max_velocity,
-                    };
+                    sdl3_sys::init::SDL_AppResult::CONTINUE
                 }
             }
-            State::JustStopped {
-                ref mut cooldown,
-                max_velocity,
-            } => {
-                if max_velocity > 10.0 {
-                    niko.face = Face::Dizzy;
-                } else if max_velocity > 0.5 {
-                    niko.face = Face::Shook;
-                } else {
-                    niko.face = Face::Happy;
-                }
-                *cooldown = cooldown.saturating_sub(delta);
-                if *cooldown == Duration::ZERO {
-                    state = State::Stopped;
-                    niko_body.set_rotation(Default::default(), false);
-                }
+            sdl3_sys::events::SDL_EventType::WINDOW_MOVED => {
+                let new_x = event.window.data1;
+                let new_y = event.window.data2;
+                let diff_x = state.last_window_x - new_x;
+                let diff_y = state.last_window_y - new_y;
+                state.last_window_x = new_x;
+                state.last_window_y = new_y;
+
+                state.rigid_body_set[state.niko_body_handle].apply_impulse(
+                    vector![diff_x as f32, diff_y as f32] / PHYSICS_METER_PX,
+                    true,
+                );
+                sdl3_sys::init::SDL_AppResult::CONTINUE
             }
-        }
-
-        unsafe {
-            gl.clear_color(0.0, 0.0, 0.0, 0.0);
-            gl.clear(glow::COLOR_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
-
-            gl.use_program(Some(shader.program));
-            gl.bind_vertex_array(Some(vertex_array));
-
-            // don't write stand to the stencil buffer
-            gl.stencil_func(glow::ALWAYS, 1, 0xFF);
-            gl.stencil_mask(0x00);
-            // draw stand
-            draw_texture_at(
-                &gl,
-                glam::vec2(24.0, 166.0),
-                0.0,
-                assets.globe.stand,
-                &shader,
-            );
-
-            // draw globe mask into stencil buffer
-
-            gl.stencil_func(glow::ALWAYS, 1, 0xFF);
-            gl.stencil_mask(0xFF);
-            draw_texture_at(&gl, glam::vec2(0.0, 0.0), 0.0, assets.globe.mask, &shader);
-
-            // draw niko, ensuring that they are clipped by the stencil buffer
-            gl.stencil_func(glow::EQUAL, 1, 0xFF);
-            gl.stencil_mask(0x00);
-
-            let niko_top_left =
-                point![-NIKO_COLLIDER_WIDTH / 2.0, -NIKO_COLLIDER_HEIGHT / 2.0] / PHYSICS_METER_PX;
-            let translated_niko_top_left = niko_position * niko_top_left * PHYSICS_METER_PX;
-
-            {
-                let texture = niko.texture(&assets);
-                let tex_size = glam::vec2(texture.width as f32, texture.height as f32);
-
-                let [niko_ox, niko_oy] = niko.frame_offset();
-                let niko_offset = glam::vec2(niko_ox, niko_oy);
-                let niko_tex_position =
-                    glam::vec2(translated_niko_top_left.x, translated_niko_top_left.y)
-                        - niko_offset;
-                let niko_angle = niko_position.rotation.angle();
-                let rotation_pos = niko_offset;
-
-                let transform = glam::Affine2::from_translation(rotation_pos);
-                let transform = transform * glam::Affine2::from_angle(niko_angle);
-                let transform = transform * glam::Affine2::from_translation(-rotation_pos);
-
-                let transform = transform * glam::Affine2::from_scale(tex_size);
-                let transform = glam::Affine2::from_translation(niko_tex_position) * transform;
-
-                draw_texture_affine(&gl, transform, texture, &shader);
-            }
-
-            {
-                let texture = niko.face.texture(&assets);
-                let tex_size = glam::vec2(texture.width as f32, texture.height as f32);
-
-                let [face_ox, face_oy] = niko.face.offset_for(niko.frame);
-                let face_offset = glam::vec2(face_ox, face_oy);
-                let face_tex_position =
-                    glam::vec2(translated_niko_top_left.x, translated_niko_top_left.y)
-                        - face_offset;
-                let face_angle = niko_position.rotation.angle();
-                let rotation_pos = face_offset;
-
-                let transform = glam::Affine2::from_translation(rotation_pos);
-                let transform = transform * glam::Affine2::from_angle(face_angle);
-                let transform = transform * glam::Affine2::from_translation(-rotation_pos);
-
-                let transform = transform * glam::Affine2::from_scale(tex_size);
-                let transform = glam::Affine2::from_translation(face_tex_position) * transform;
-
-                draw_texture_affine(&gl, transform, texture, &shader);
-            }
-
-            draw_texture_at(&gl, glam::vec2(0.0, 0.0), 0.0, assets.globe.glass, &shader);
-
-            sdl3_sys::video::SDL_GL_SwapWindow(window);
-
-            std::thread::sleep(FRAME_DUR);
+            _ => sdl3_sys::init::SDL_AppResult::CONTINUE,
         }
     }
 }
+// statically assert SDL_AppEvent has the right signature
+#[allow(dead_code)]
+const _: sdl3_sys::init::SDL_AppEvent_func = Some(SDL_AppEvent);
+
+#[no_mangle]
+pub extern "C" fn SDL_AppQuit(appstate: *mut c_void) {
+    unsafe {
+        let app = Box::from_raw(appstate.cast::<App>());
+        sdl3_sys::video::SDL_DestroyWindow(app.window);
+        sdl3_sys::init::SDL_Quit();
+    }
+}
+// statically assert SDL_AppCleanup has the right signature
+#[allow(dead_code)]
+const _: sdl3_sys::init::SDL_AppQuit_func = Some(SDL_AppQuit);
