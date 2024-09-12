@@ -513,12 +513,11 @@ extern "C" fn app_init(
         .build();
     let niko_body_handle = rigid_body_set.insert(niko_body);
 
-    let niko_collider = ColliderBuilder::cuboid(
-        NIKO_COLLIDER_WIDTH / 2.0 / PHYSICS_METER_PX,
-        NIKO_COLLIDER_HEIGHT / 2.0 / PHYSICS_METER_PX,
-    )
-    .restitution(0.75)
-    .build();
+    let collider_radius = NIKO_COLLIDER_WIDTH / 2.0 / PHYSICS_METER_PX;
+    let half_height = NIKO_COLLIDER_HEIGHT / 2.0 / PHYSICS_METER_PX;
+    let niko_collider = ColliderBuilder::capsule_y(half_height - collider_radius, collider_radius)
+        .restitution(0.75)
+        .build();
     collider_set.insert_with_parent(niko_collider, niko_body_handle, &mut rigid_body_set);
 
     let integration_parameters = IntegrationParameters::default();
