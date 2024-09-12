@@ -533,7 +533,8 @@ extern "C" fn app_init(
             sdl3_sys::video::SDL_WINDOW_OPENGL
                 | sdl3_sys::video::SDL_WINDOW_TRANSPARENT
                 | sdl3_sys::video::SDL_WINDOW_ALWAYS_ON_TOP
-                | sdl3_sys::video::SDL_WINDOW_BORDERLESS,
+                | sdl3_sys::video::SDL_WINDOW_BORDERLESS
+                | sdl3_sys::video::SDL_WINDOW_UTILITY,
         )
     };
 
