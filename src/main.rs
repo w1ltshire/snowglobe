@@ -310,6 +310,9 @@ const PHYSICS_METER_PX: f32 = 100.0;
 const NIKO_COLLIDER_WIDTH: f32 = 77.0;
 const NIKO_COLLIDER_HEIGHT: f32 = 144.0;
 
+const GLOBE_WIDTH: i32 = 224;
+const GLOBE_HEIGHT: i32 = 248;
+
 const UPRIGHT_COOLDOWN: Duration = Duration::from_millis(1000);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -447,6 +450,7 @@ struct App {
 
     niko: Niko,
     state: State,
+    scale: i32, // 2 by default
 
     last: Instant,
     accum: Duration,
@@ -528,8 +532,8 @@ extern "C" fn app_init(
         sdl3_sys::video::SDL_GL_SetAttribute(sdl3_sys::video::SDL_GLattr::STENCIL_SIZE, 1);
         sdl3_sys::video::SDL_CreateWindow(
             c"snowglobe".as_ptr(), // <3 c string literals
-            224 * 2,
-            248 * 2,
+            GLOBE_WIDTH * 2,
+            GLOBE_HEIGHT * 2,
             sdl3_sys::video::SDL_WINDOW_OPENGL
                 | sdl3_sys::video::SDL_WINDOW_TRANSPARENT
                 | sdl3_sys::video::SDL_WINDOW_ALWAYS_ON_TOP
@@ -595,6 +599,7 @@ extern "C" fn app_init(
 
         niko,
         state,
+        scale: 2,
 
         last,
         accum,
@@ -819,10 +824,43 @@ extern "C" fn app_event(
             sdl3_sys::events::SDL_EventType::QUIT => sdl3_sys::init::SDL_AppResult::FAILURE,
             sdl3_sys::events::SDL_EventType::KEY_DOWN => {
                 let key = event.key.key;
-                if key == sdl3_sys::keycode::SDLK_ESCAPE {
-                    sdl3_sys::init::SDL_AppResult::FAILURE
-                } else {
-                    sdl3_sys::init::SDL_AppResult::CONTINUE
+                match key {
+                    sdl3_sys::keycode::SDLK_ESCAPE => sdl3_sys::init::SDL_AppResult::FAILURE,
+                    sdl3_sys::keycode::SDLK_UP => {
+                        state.scale += 1;
+                        state.scale = state.scale.min(4);
+                        sdl3_sys::video::SDL_SetWindowSize(
+                            state.window,
+                            GLOBE_WIDTH * state.scale,
+                            GLOBE_HEIGHT * state.scale,
+                        );
+                        // resize opengl viewport to match window size
+                        state.gl.viewport(
+                            0,
+                            0,
+                            GLOBE_WIDTH * state.scale,
+                            GLOBE_HEIGHT * state.scale,
+                        );
+                        sdl3_sys::init::SDL_AppResult::CONTINUE
+                    }
+                    sdl3_sys::keycode::SDLK_DOWN => {
+                        state.scale -= 1;
+                        state.scale = state.scale.max(1);
+                        sdl3_sys::video::SDL_SetWindowSize(
+                            state.window,
+                            GLOBE_WIDTH * state.scale,
+                            GLOBE_HEIGHT * state.scale,
+                        );
+                        // resize opengl viewport to match window size
+                        state.gl.viewport(
+                            0,
+                            0,
+                            GLOBE_WIDTH * state.scale,
+                            GLOBE_HEIGHT * state.scale,
+                        );
+                        sdl3_sys::init::SDL_AppResult::CONTINUE
+                    }
+                    _ => sdl3_sys::init::SDL_AppResult::CONTINUE,
                 }
             }
             sdl3_sys::events::SDL_EventType::WINDOW_MOVED => {
