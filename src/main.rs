@@ -502,7 +502,9 @@ extern "C" fn app_init(
         // duplicate the first vertex so we get a full circle
         point![2.0, 111.0] / PHYSICS_METER_PX,
     ];
-    let globe_collider = ColliderBuilder::polyline(globe_vertices, None).build();
+    let globe_collider = ColliderBuilder::polyline(globe_vertices, None)
+        .restitution(0.75)
+        .build();
     collider_set.insert(globe_collider);
 
     let niko_body = RigidBodyBuilder::dynamic()
