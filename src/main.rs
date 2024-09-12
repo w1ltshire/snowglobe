@@ -1,6 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![allow(clippy::not_unsafe_ptr_arg_deref)] // we have functions that are marked as pub, but are only used in C
-#![no_main] // this is still a binary crate, but sdl is providing main for us
 
 use glow::HasContext;
 use rapier2d::prelude::*;
@@ -468,8 +467,7 @@ struct App {
 
 // i love smuggling pointers across FFI boundaries
 // y...yayyyyyyy....
-#[no_mangle]
-pub extern "C" fn SDL_AppInit(
+extern "C" fn app_init(
     appstate: *mut *mut c_void,
     _argc: c_int,
     _argv: *mut *mut c_char,
@@ -622,12 +620,8 @@ pub extern "C" fn SDL_AppInit(
 
     sdl3_sys::init::SDL_AppResult::CONTINUE
 }
-// statically assert SDL_AppInit has the right signature
-#[allow(dead_code)]
-const _: sdl3_sys::init::SDL_AppInit_func = Some(SDL_AppInit);
 
-#[no_mangle]
-pub extern "C" fn SDL_AppIterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResult {
+extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResult {
     let app = unsafe { &mut *appstate.cast::<App>() };
 
     let now = Instant::now();
@@ -812,12 +806,8 @@ pub extern "C" fn SDL_AppIterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_A
 
     sdl3_sys::init::SDL_AppResult::CONTINUE
 }
-// statically assert SDL_AppIterate has the right signature
-#[allow(dead_code)]
-const _: sdl3_sys::init::SDL_AppIterate_func = Some(SDL_AppIterate);
 
-#[no_mangle]
-pub extern "C" fn SDL_AppEvent(
+extern "C" fn app_event(
     appstate: *mut c_void,
     event: *mut sdl3_sys::events::SDL_Event,
 ) -> sdl3_sys::init::SDL_AppResult {
@@ -852,18 +842,37 @@ pub extern "C" fn SDL_AppEvent(
         }
     }
 }
-// statically assert SDL_AppEvent has the right signature
-#[allow(dead_code)]
-const _: sdl3_sys::init::SDL_AppEvent_func = Some(SDL_AppEvent);
 
-#[no_mangle]
-pub extern "C" fn SDL_AppQuit(appstate: *mut c_void) {
+extern "C" fn app_quit(appstate: *mut c_void) {
     unsafe {
         let app = Box::from_raw(appstate.cast::<App>());
         sdl3_sys::video::SDL_DestroyWindow(app.window);
         sdl3_sys::init::SDL_Quit();
     }
 }
-// statically assert SDL_AppCleanup has the right signature
-#[allow(dead_code)]
-const _: sdl3_sys::init::SDL_AppQuit_func = Some(SDL_AppQuit);
+
+// sdl3_sys doesn't provide bindings for SDL_main.h, so we have to fudge this a little
+extern "C" {
+    fn SDL_EnterAppMainCallbacks(
+        _argc: c_int,
+        _argv: *mut *mut c_char,
+        app_init: sdl3_sys::init::SDL_AppInit_func,
+        app_iterate: sdl3_sys::init::SDL_AppIterate_func,
+        app_event: sdl3_sys::init::SDL_AppEvent_func,
+        app_quit: sdl3_sys::init::SDL_AppQuit_func,
+    ) -> c_int;
+}
+
+fn main() {
+    // normally SDL_main would generate a main function that would call this for us, but that's kiiiiiiiinda not possible
+    unsafe {
+        SDL_EnterAppMainCallbacks(
+            0,
+            std::ptr::null_mut(),
+            Some(app_init),
+            Some(app_iterate),
+            Some(app_event),
+            Some(app_quit),
+        );
+    }
+}

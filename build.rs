@@ -220,13 +220,6 @@ fn main() {
         .unwrap()
         .to_string();
 
-    // we have to build and link main.c to actually provide the main() function
-    cc::Build::new()
-        .file("src/main.c")
-        .include(sdl3_includes)
-        .compile("main");
-    println!("cargo:rerun-if-changed=src/main.c");
-
     link_sdl3(target_os);
 }
 
