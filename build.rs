@@ -193,6 +193,12 @@ fn copy_dynamic_libraries(sdl3_compiled_path: PathBuf, target_os: &str) {
 }
 
 fn main() {
+    #[cfg(target_os = "windows")]
+    {
+        let mut res = winres::WindowsResource::new();
+        res.set_icon("src/assets/icon.ico");
+        res.compile().unwrap();
+    }
     let target = env::var("TARGET").expect("Cargo build scripts always have TARGET");
     let host = env::var("HOST").expect("Cargo build scripts always have HOST");
     let target_os = get_os_from_triple(target.as_str()).unwrap();
