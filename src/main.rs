@@ -243,22 +243,22 @@ type Offset = [f32; 2];
 
 impl Niko {
     const OFFSETS: [Offset; 16] = [
-        [48.0, 12.0], // 1 
-        [48.0, 12.0],
-        [48.0, 12.0],
-        [48.0, 12.0],
-        [47.0, 14.0], // 5
-        [47.0, 14.0],
-        [51.0, 14.0], // 7
-        [51.0, 14.0],
-        [50.0, 15.0], // 9
-        [50.0, 15.0],
-        [50.0, 15.0],
-        [50.0, 15.0],
-        [47.0, 14.0], // 13
-        [47.0, 14.0],
-        [47.0, 14.0],
-        [47.0, 14.0],
+        [53.0, 2.0], // 1
+        [53.0, 2.0],
+        [53.0, 2.0],
+        [53.0, 2.0],
+        [52.0, 0.0], // 5
+        [52.0, 0.0],
+        [56.0, 0.0], // 7
+        [56.0, 0.0],
+        [55.0, -1.0], // 9
+        [55.0, -1.0],
+        [55.0, -1.0],
+        [55.0, -1.0],
+        [52.0, 0.0], // 13
+        [52.0, 0.0],
+        [52.0, 0.0],
+        [52.0, 0.0],
     ];
 
     pub fn frame_offset(self) -> Offset {
@@ -272,22 +272,22 @@ impl Niko {
 
 impl Face {
     const OFFSETS: [Offset; 16] = [
-        [-20.0, -27.0], // 1
-        [-20.0, -27.0],
-        [-20.0, -27.0],
-        [-20.0, -27.0],
-        [-21.0, -30.0], // 5
-        [-21.0, -30.0],
-        [-21.0, -30.0],
-        [-21.0, -30.0],
-        [-22.0, -30.0], // 9
-        [-22.0, -30.0],
-        [-22.0, -30.0],
-        [-22.0, -30.0],
-        [-21.0, -30.0], // 13
-        [-21.0, -30.0],
-        [-21.0, -30.0],
-        [-21.0, -30.0],
+        [-15.0, -41.0], // 1
+        [-15.0, -41.0],
+        [-15.0, -41.0],
+        [-15.0, -41.0],
+        [-16.0, -44.0], // 5
+        [-16.0, -44.0],
+        [-16.0, -44.0],
+        [-16.0, -44.0],
+        [-17.0, -44.0], // 9
+        [-17.0, -44.0],
+        [-17.0, -44.0],
+        [-17.0, -44.0],
+        [-16.0, -44.0], // 13
+        [-16.0, -44.0],
+        [-16.0, -44.0],
+        [-16.0, -44.0],
     ];
 
     pub fn offset_for(self, frame: usize) -> Offset {
@@ -507,18 +507,11 @@ extern "C" fn app_init(
         .build();
     let niko_body_handle = rigid_body_set.insert(niko_body);
 
-    let niko_collider_vertices = vec![
-        point![0.0, 77.0] / PHYSICS_METER_PX,
-        point![14.0, 6.0] / PHYSICS_METER_PX,
-        point![55.0, 0.0] / PHYSICS_METER_PX,
-        point![79.0, 66.0] / PHYSICS_METER_PX,
-        point![46.0, 122.0] / PHYSICS_METER_PX,
-        point![5.0, 124.0] / PHYSICS_METER_PX,
-        point![0.0, 77.0] / PHYSICS_METER_PX,
-    ];
-    
-    let niko_collider = ColliderBuilder::polyline(niko_collider_vertices, None)
-    //.restitution(0.75) // No clue what this does but line 501 doesn't have it :>
+    let niko_collider = ColliderBuilder::cuboid(
+        NIKO_COLLIDER_WIDTH / 2.0 / PHYSICS_METER_PX,
+        NIKO_COLLIDER_HEIGHT / 2.0 / PHYSICS_METER_PX,
+    )
+    .restitution(0.75)
     .build();
     collider_set.insert_with_parent(niko_collider, niko_body_handle, &mut rigid_body_set);
 
