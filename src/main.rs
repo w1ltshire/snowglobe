@@ -2,6 +2,7 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)] // we have functions that are marked as pub, but are only used in C
 
 use glow::HasContext;
+use nalgebra::UnitComplex;
 use rapier2d::prelude::*;
 
 use std::{
@@ -304,7 +305,7 @@ impl Face {
 }
 
 const FRAME_DUR: Duration = Duration::from_millis(16);
-const ANIM_FRAME_DUR: Duration = Duration::from_millis(100);
+const ANIM_FRAME_DUR: Duration = Duration::from_millis(150);
 const PHYSICS_METER_PX: f32 = 100.0;
 
 const NIKO_COLLIDER_WIDTH: f32 = 56.0;
@@ -313,19 +314,25 @@ const NIKO_COLLIDER_HEIGHT: f32 = 103.0;
 const GLOBE_WIDTH: i32 = 224;
 const GLOBE_HEIGHT: i32 = 248;
 
-const UPRIGHT_COOLDOWN: Duration = Duration::from_millis(1000);
+const VELOCITY_FOR_MAX_UPRIGHT_COOLDOWN: f32 = 10.0;
+const MIN_UPRIGHT_COOLDOWN_MS: f32 = 1000.0;
+const MAX_UPRIGHT_COOLDOWN_MS: f32 = 5000.0;
+
+const UPRIGHTING_ANGLE_REMAINDER_MULTIPLIER: f32 = 0.05;
+const UPRIGHTING_ANGLE_STATIC_GROWTH: f32 = 0.01;
+const UPRIGHTING_ANGLE_SNAP_MARGIN: f32 = 0.02;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum State {
     Stopped,
     Moving {
-        max_velocity: f32,
+        max_velocity: f32
     },
     // cooldown until Niko stops being dizzy and uprights themselves
     JustStopped {
-        cooldown: Duration,
-        max_velocity: f32,
+        cooldown: Duration
     },
+    Uprighting,
 }
 
 // the sdl3 crate does not expose the API for setting the hit test, so we have to do it using the raw bindings
@@ -678,7 +685,9 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
         State::Moving {
             ref mut max_velocity,
         } => {
-            if *max_velocity > 0.5 {
+            if *max_velocity > 5.0 {
+                app.niko.face = Face::Dizzy;
+            } else if *max_velocity > 0.5 {
                 app.niko.face = Face::Shook;
             } else {
                 app.niko.face = Face::Happy;
@@ -691,27 +700,29 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
 
             // looks like Niko isn't not moving anymore, so set state to JustStopped
             if !niko_moving {
+                let cooldown_normalized_velocity = (*max_velocity / VELOCITY_FOR_MAX_UPRIGHT_COOLDOWN).min(1.0);
+                let cooldown_ms = (cooldown_normalized_velocity * MAX_UPRIGHT_COOLDOWN_MS).max(MIN_UPRIGHT_COOLDOWN_MS) as u64;
                 app.state = State::JustStopped {
-                    cooldown: UPRIGHT_COOLDOWN,
-                    max_velocity: *max_velocity,
+                    cooldown: Duration::from_millis(cooldown_ms)
                 };
             }
         }
         State::JustStopped {
-            ref mut cooldown,
-            max_velocity,
+            ref mut cooldown
         } => {
-            if max_velocity > 10.0 {
-                app.niko.face = Face::Dizzy;
-            } else if max_velocity > 0.5 {
-                app.niko.face = Face::Shook;
-            } else {
-                app.niko.face = Face::Happy;
-            }
             *cooldown = cooldown.saturating_sub(delta);
             if *cooldown == Duration::ZERO {
-                app.state = State::Stopped;
+                app.state = State::Uprighting;
+            }
+        },
+        State::Uprighting => {
+            let body_angle = niko_body.rotation().angle();
+            if body_angle.abs() > UPRIGHTING_ANGLE_SNAP_MARGIN {
+                let delta = (body_angle.abs() * UPRIGHTING_ANGLE_REMAINDER_MULTIPLIER + UPRIGHTING_ANGLE_STATIC_GROWTH) * -body_angle.signum();
+                niko_body.set_rotation(UnitComplex::new(body_angle + delta), false);
+            } else {
                 niko_body.set_rotation(Default::default(), false);
+                app.state = State::Stopped;
             }
         }
     }
