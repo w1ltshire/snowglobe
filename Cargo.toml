@@ -17,3 +17,6 @@ cmake = "0.1.51"
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1.12"
+
+[package.metadata.winres]
+OriginalFilename = "snowglobe.exe"
