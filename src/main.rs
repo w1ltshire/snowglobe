@@ -4,6 +4,7 @@
 use glow::HasContext;
 use nalgebra::UnitComplex;
 use rapier2d::prelude::*;
+use sdl3_sys::{surface::SDL_Surface, video::SDL_Window};
 
 use std::{
     ffi::{c_char, c_int, c_void},
@@ -304,7 +305,6 @@ impl Face {
     }
 }
 
-const FRAME_DUR: Duration = Duration::from_millis(16);
 const ANIM_FRAME_DUR: Duration = Duration::from_millis(150);
 const PHYSICS_METER_PX: f32 = 100.0;
 
@@ -549,6 +549,13 @@ extern "C" fn app_init(
                 | sdl3_sys::video::SDL_WINDOW_UTILITY,
         )
     };
+
+    unsafe {
+        let file = c"src/assets/window_shape.bmp".as_ptr();
+        let surface = sdl3_sys::surface::SDL_LoadBMP(file);
+        SDL_SetSurfaceColorKey(surface, true, 0);
+        SDL_SetWindowShape(window, surface);
+    }
 
     // set the hit test to allow the window to be dragged by the globe
     unsafe {
@@ -818,8 +825,6 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
         );
 
         sdl3_sys::video::SDL_GL_SwapWindow(app.window);
-
-        std::thread::sleep(FRAME_DUR);
     }
 
     sdl3_sys::init::SDL_AppResult::CONTINUE
@@ -912,6 +917,9 @@ extern "C" {
         app_event: sdl3_sys::init::SDL_AppEvent_func,
         app_quit: sdl3_sys::init::SDL_AppQuit_func,
     ) -> c_int;
+
+    pub fn SDL_SetWindowShape(window: *mut SDL_Window, shape: *mut SDL_Surface) -> bool;
+    pub fn SDL_SetSurfaceColorKey(surface: *mut SDL_Surface, enabled: bool, key: u32) -> bool;
 }
 
 fn main() {
