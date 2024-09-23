@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![allow(clippy::not_unsafe_ptr_arg_deref)] // we have functions that are marked as pub, but are only used in C
 
+use rand::Rng;
 use glow::HasContext;
 use nalgebra::UnitComplex;
 use rapier2d::prelude::*;
@@ -11,6 +12,41 @@ use std::{
     ops::Mul,
     time::{Duration, Instant},
 };
+
+struct DebugRender<'a> {
+    gl: &'a glow::Context
+}
+
+impl<'a> rapier2d::pipeline::DebugRenderBackend for DebugRender<'a> {
+    fn draw_line(
+      &mut self,
+      object: rapier2d::pipeline::DebugRenderObject<'_>,
+      a: Point<f32>,
+      b: Point<f32>,
+      color: [f32; 4],
+    ) {
+        unsafe {
+            /* Does nothing at the
+            let vertices = [a.x, a.y, b.x, b.y];
+            let vertices_u8 = core::slice::from_raw_parts(
+                vertices.as_ptr() as *const u8,
+                vertices.len() * core::mem::size_of::<f32>()
+            );
+
+            let vbo = self.gl.create_buffer().unwrap();
+            self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+            self.gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, vertices_u8, glow::STATIC_DRAW);
+
+            let vao = self.gl.create_vertex_array().unwrap();
+            self.gl.bind_vertex_array(Some(vao));
+            self.gl.enable_vertex_attrib_array(0);
+            self.gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 8, 0);
+
+            self.gl.draw_arrays(glow::LINE, 0, 4);
+            */
+        }
+    }
+}
 
 mod raw_assets {
     pub mod globe {
@@ -46,6 +82,8 @@ mod raw_assets {
             include_bytes!("assets/niko/frames/15.png"),
         ];
     }
+
+    pub const FLAKE: &[u8] = include_bytes!("assets/flake.png");
 }
 
 pub mod assets {
@@ -63,6 +101,7 @@ pub mod assets {
     pub struct Assets {
         pub globe: Globe,
         pub niko: Niko,
+        pub flake: Texture
     }
 
     pub struct Globe {
@@ -135,6 +174,8 @@ pub mod assets {
                 shook: texture_from_bytes(gl, raw_assets::niko::faces::SHOOK),
             };
 
+            let flake = texture_from_bytes(gl, raw_assets::FLAKE);
+
             let frames = std::array::from_fn(|i| {
                 // ideally we'd be able to use an iterator and map this, but rust doesnt have that yet
                 let frame = raw_assets::niko::FRAMES[i];
@@ -143,7 +184,7 @@ pub mod assets {
 
             let niko = Niko { faces, frames };
 
-            Assets { globe, niko }
+            Assets { globe, niko, flake }
         }
     }
 }
@@ -322,6 +363,9 @@ const UPRIGHTING_ANGLE_REMAINDER_MULTIPLIER: f32 = 0.05;
 const UPRIGHTING_ANGLE_STATIC_GROWTH: f32 = 0.01;
 const UPRIGHTING_ANGLE_SNAP_MARGIN: f32 = 0.02;
 
+const FLAKE_COUNT: usize = 25;
+const GRAVITY: &Vector<Real> = &vector![0.0, 1.0 / PHYSICS_METER_PX];
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum State {
     Stopped,
@@ -474,6 +518,9 @@ struct App {
     ccd_solver: CCDSolver,
 
     niko_body_handle: RigidBodyHandle,
+    flake_handles: [RigidBodyHandle; FLAKE_COUNT],
+
+    debug_pipeline: DebugRenderPipeline,
 }
 
 // i love smuggling pointers across FFI boundaries
@@ -509,13 +556,48 @@ extern "C" fn app_init(
         // duplicate the first vertex so we get a full circle
         point![2.0, 111.0] / PHYSICS_METER_PX,
     ];
+
     let globe_collider = ColliderBuilder::polyline(globe_vertices, None)
         .restitution(0.75)
+        .collision_groups(InteractionGroups::new(Group::GROUP_1, Group::GROUP_2 | Group::GROUP_3))
         .build();
     collider_set.insert(globe_collider);
 
+    let mut flake_handles: [RigidBodyHandle; FLAKE_COUNT] = [Default::default(); FLAKE_COUNT];
+    let flake_template = RigidBodyBuilder::dynamic()
+        .translation(vector![112.0, 124.0] / PHYSICS_METER_PX)
+        .ccd_enabled(true)
+        .can_sleep(false)
+        .build();
+
+    let flake_collider_template = ColliderBuilder::ball(5.0 / PHYSICS_METER_PX)
+        .collision_groups(InteractionGroups::new(Group::GROUP_2, Group::GROUP_1))
+        .restitution(0.75)
+        .build();
+
+    let mut angle:f32 = 0.0;
+    let angle_delta:f32 = 360.0 / (FLAKE_COUNT + 1) as f32; 
+    for i in 0..FLAKE_COUNT {
+        let mut flake = flake_template.clone();
+
+        let radian:f32 = angle.to_radians();
+        let direction_vector = vector![radian.cos(), radian.sin()];
+        flake.set_translation(flake.translation() + direction_vector * 50.0 / PHYSICS_METER_PX, true);
+        flake.set_linvel(direction_vector / PHYSICS_METER_PX * 20.0, true);
+
+        let ang_vel = rand::thread_rng().gen_range(-100..=100) as f32 / PHYSICS_METER_PX;
+        flake.set_angvel(ang_vel, true);
+
+        let flake_handle = rigid_body_set.insert(flake);
+        collider_set.insert_with_parent(flake_collider_template.clone(), flake_handle, &mut rigid_body_set);
+        flake_handles[i] = flake_handle;
+
+        angle += angle_delta;
+    }
+
     let niko_body = RigidBodyBuilder::dynamic()
         .translation(vector![111.0, 109.0] / PHYSICS_METER_PX)
+        .gravity_scale(0.0)
         .ccd_enabled(true) // people will probably be violently shaking the globe
         .build();
     let niko_body_handle = rigid_body_set.insert(niko_body);
@@ -523,6 +605,7 @@ extern "C" fn app_init(
     let collider_radius = NIKO_COLLIDER_WIDTH / 2.0 / PHYSICS_METER_PX;
     let half_height = NIKO_COLLIDER_HEIGHT / 2.0 / PHYSICS_METER_PX;
     let niko_collider = ColliderBuilder::capsule_y(half_height - collider_radius, collider_radius)
+        .collision_groups(InteractionGroups::new(Group::GROUP_3, Group::GROUP_1))
         .restitution(0.75)
         .build();
     collider_set.insert_with_parent(niko_collider, niko_body_handle, &mut rigid_body_set);
@@ -631,6 +714,9 @@ extern "C" fn app_init(
         ccd_solver,
 
         niko_body_handle,
+        flake_handles,
+
+        debug_pipeline: DebugRenderPipeline::new(Default::default(), DebugRenderMode::all())
     };
     let app = Box::new(app);
     let app = Box::into_raw(app);
@@ -651,7 +737,7 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
     app.last = now;
 
     app.physics_pipeline.step(
-        &vector![0.0, 0.0],
+        GRAVITY,
         &app.integration_parameters,
         &mut app.island_manager,
         &mut app.broad_phase,
@@ -772,6 +858,7 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
 
         let niko_top_left =
             point![-NIKO_COLLIDER_WIDTH / 2.0, -NIKO_COLLIDER_HEIGHT / 2.0] / PHYSICS_METER_PX;
+
         let translated_niko_top_left = niko_position * niko_top_left * PHYSICS_METER_PX;
 
         {
@@ -816,12 +903,42 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
             draw_texture_affine(&app.gl, transform, texture, &app.shader);
         }
 
+        {
+            let texture = app.assets.flake;
+            let tex_size = glam::vec2(texture.width as f32, texture.height as f32);
+            let tex_offset = tex_size / 2.0;
+            for i in 0..FLAKE_COUNT  {
+                let flake_handle = app.flake_handles[i];
+                let flake_body = &app.rigid_body_set[flake_handle];
+
+                let flake_body_position = *flake_body.position();
+                let flake_pos = flake_body_position * point![0.0, 0.0] * PHYSICS_METER_PX;
+
+                let flake_vec2 = glam::vec2(flake_pos.x, flake_pos.y) - glam::vec2(5.0, -5.0);
+                let transform = glam::Affine2::from_translation(flake_vec2);
+                let transform = transform * glam::Affine2::from_scale(tex_size);
+                let transform = transform * glam::Affine2::from_angle(flake_body_position.rotation.angle());
+                
+                draw_texture_affine(&app.gl, transform, texture, &app.shader);
+            }
+        }
+
         draw_texture_at(
             &app.gl,
             glam::vec2(0.0, 0.0),
             0.0,
             app.assets.globe.glass,
             &app.shader,
+        );
+        
+        let mut render = DebugRender { gl: &app.gl };
+        app.debug_pipeline.render(
+            &mut render, 
+            &app.rigid_body_set, 
+            &app.collider_set,
+            &app.impulse_joint_set,
+            &app.multibody_joint_set,
+            &app.narrow_phase
         );
 
         sdl3_sys::video::SDL_GL_SwapWindow(app.window);
@@ -892,6 +1009,15 @@ extern "C" fn app_event(
                     vector![diff_x as f32, diff_y as f32] / PHYSICS_METER_PX,
                     true,
                 );
+
+                let flake_force = vector![diff_x as f32, diff_y as f32] / 300.0 / PHYSICS_METER_PX;
+                for i in 0..FLAKE_COUNT {
+                    state.rigid_body_set[state.flake_handles[i]].apply_impulse(
+                        flake_force,
+                        true,
+                    );
+                }
+
                 sdl3_sys::init::SDL_AppResult::CONTINUE
             }
             _ => sdl3_sys::init::SDL_AppResult::CONTINUE,
