@@ -26,24 +26,18 @@ impl<'a> rapier2d::pipeline::DebugRenderBackend for DebugRender<'a> {
       color: [f32; 4],
     ) {
         unsafe {
-            /* Does nothing at the
-            let vertices = [a.x, a.y, b.x, b.y];
-            let vertices_u8 = core::slice::from_raw_parts(
-                vertices.as_ptr() as *const u8,
-                vertices.len() * core::mem::size_of::<f32>()
+            // let vertices = [a.x, a.y, b.x, b.y];
+            let vertices = [-1.0, -1.0, 1.0, 1.0];
+
+            let vbo = self.gl.create_buffer().expect("failed to create buffer");
+            self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+            self.gl.buffer_data_u8_slice(
+                glow::ARRAY_BUFFER,
+                bytemuck::cast_slice(&vertices),
+                glow::STATIC_DRAW
             );
 
-            let vbo = self.gl.create_buffer().unwrap();
-            self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
-            self.gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, vertices_u8, glow::STATIC_DRAW);
-
-            let vao = self.gl.create_vertex_array().unwrap();
-            self.gl.bind_vertex_array(Some(vao));
-            self.gl.enable_vertex_attrib_array(0);
-            self.gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 8, 0);
-
-            self.gl.draw_arrays(glow::LINE, 0, 4);
-            */
+            self.gl.draw_arrays(glow::LINE, 0, 2);
         }
     }
 }
@@ -268,6 +262,76 @@ pub mod shader {
     }
 }
 
+pub mod debug_shader {
+    use glow::HasContext;
+
+    pub const VERTEX: &str = include_str!("shaders/debug.vert");
+    pub const FRAGMENT: &str = include_str!("shaders/debug.frag");
+
+    pub struct DebugShader {
+        pub program: glow::NativeProgram,
+        pub u_color: glow::UniformLocation
+    }
+    
+    pub fn new(gl: &glow::Context) -> DebugShader {
+
+        let program = unsafe { gl.create_program() }.expect("failed to create debug program");
+
+        let vert_shader = unsafe { gl.create_shader(glow::VERTEX_SHADER) }
+            .expect("failed to create vertex shader");
+
+        unsafe {
+            gl.shader_source(vert_shader, VERTEX);
+            gl.compile_shader(vert_shader);
+
+            if !gl.get_shader_compile_status(vert_shader) {
+                panic!(
+                    "failed to compile vertex shader: {}",
+                    gl.get_shader_info_log(vert_shader)
+                );
+            }
+
+            gl.attach_shader(program, vert_shader);
+        }
+
+        let frag_shader = unsafe { gl.create_shader(glow::FRAGMENT_SHADER) }
+            .expect("failed to create fragment shader");
+
+        unsafe {
+            gl.shader_source(frag_shader, FRAGMENT);
+            gl.compile_shader(frag_shader);
+
+            if !gl.get_shader_compile_status(frag_shader) {
+                panic!(
+                    "failed to compile fragment shader: {}",
+                    gl.get_shader_info_log(frag_shader)
+                );
+            }
+
+            gl.attach_shader(program, frag_shader);
+        }
+        
+        unsafe {
+            gl.link_program(program);
+
+            if !gl.get_program_link_status(program) {
+                panic!(
+                    "failed to link program: {}",
+                    gl.get_program_info_log(program)
+                );
+            }
+        }
+        
+        let u_color = unsafe { gl.get_uniform_location(program, "u_color") }
+            .expect("failed to get uniform location");
+
+        DebugShader {
+            program,
+            u_color,
+        }
+    }
+}
+
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub struct Niko {
     frame: usize, // 0..16
@@ -455,6 +519,28 @@ fn create_vertex_buffer(gl: &glow::Context) -> glow::NativeVertexArray {
     }
 }
 
+fn create_debug_vertex_buffer(gl: &glow::Context) -> glow::NativeVertexArray {
+    unsafe {
+        let vao = gl.create_vertex_array().expect("failed to create vertex array");
+        gl.bind_vertex_array(Some(vao));
+
+        gl.enable_vertex_attrib_array(0);
+        gl.vertex_attrib_pointer_f32(
+            0,
+            2,
+            glow::FLOAT,
+            false,
+            2 * std::mem::size_of::<f32>() as i32,
+            0
+        );
+
+        gl.bind_buffer(glow::ARRAY_BUFFER, None);
+        gl.bind_vertex_array(None);
+
+        vao
+    }
+}
+
 fn draw_texture_at(
     gl: &glow::Context,
     pos: glam::Vec2,
@@ -495,9 +581,11 @@ struct App {
     gl: glow::Context,
 
     shader: shader::Shader,
+    debug_shader: debug_shader::DebugShader,
     assets: assets::Assets,
 
     vertex_array: glow::NativeVertexArray,
+    debug_vertex_array: glow::NativeVertexArray,
 
     niko: Niko,
     state: State,
@@ -669,8 +757,10 @@ extern "C" fn app_init(
     }
 
     let shader = shader::Shader::new(&gl);
+    let debug_shader = debug_shader::new(&gl);
     let assets = assets::Assets::load(&gl);
     let vertex_array = create_vertex_buffer(&gl);
+    let debug_vertex_array = create_debug_vertex_buffer(&gl);
 
     let niko = Niko::default();
     let state = State::Stopped;
@@ -692,8 +782,10 @@ extern "C" fn app_init(
         gl,
 
         shader,
+        debug_shader,
         assets,
         vertex_array,
+        debug_vertex_array,
 
         niko,
         state,
@@ -822,8 +914,7 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
 
     unsafe {
         app.gl.clear_color(0.0, 0.0, 0.0, 0.0);
-        app.gl
-            .clear(glow::COLOR_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
+        app.gl.clear(glow::COLOR_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
 
         app.gl.use_program(Some(app.shader.program));
         app.gl.bind_vertex_array(Some(app.vertex_array));
@@ -931,6 +1022,9 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
             &app.shader,
         );
         
+        app.gl.use_program(Some(app.debug_shader.program));
+        app.gl.bind_vertex_array(Some(app.debug_vertex_array));
+
         let mut render = DebugRender { gl: &app.gl };
         app.debug_pipeline.render(
             &mut render, 
