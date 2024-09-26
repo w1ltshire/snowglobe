@@ -617,6 +617,33 @@ extern "C" fn app_init(
         sdl3_sys::init::SDL_Init(sdl3_sys::init::SDL_INIT_VIDEO | sdl3_sys::init::SDL_INIT_EVENTS)
     };
 
+    let window = unsafe {
+        sdl3_sys::video::SDL_GL_SetAttribute(sdl3_sys::video::SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        sdl3_sys::video::SDL_GL_SetAttribute(sdl3_sys::video::SDL_GL_CONTEXT_MINOR_VERSION, 3);
+        sdl3_sys::video::SDL_GL_SetAttribute(sdl3_sys::video::SDL_GLattr::STENCIL_SIZE, 1);
+        sdl3_sys::video::SDL_CreateWindow(
+            c"snowglobe".as_ptr(), // <3 c string literals
+            GLOBE_WIDTH * 2,
+            GLOBE_HEIGHT * 2,
+            sdl3_sys::video::SDL_WINDOW_OPENGL
+                | sdl3_sys::video::SDL_WINDOW_TRANSPARENT
+                | sdl3_sys::video::SDL_WINDOW_ALWAYS_ON_TOP
+                | sdl3_sys::video::SDL_WINDOW_BORDERLESS
+                | sdl3_sys::video::SDL_WINDOW_UTILITY,
+        )
+    };
+
+    // initialize glow
+    let gl = unsafe {
+        sdl3_sys::video::SDL_GL_CreateContext(window);
+        glow::Context::from_loader_function_cstr(|s| {
+            sdl3_sys::video::SDL_GL_GetProcAddress(s.as_ptr())
+                .map_or(std::ptr::null(), |p| p as *const _)
+        })
+    };
+    
+    let assets = assets::Assets::load(&gl);
+
     let mut rigid_body_set = RigidBodySet::new();
     let mut collider_set = ColliderSet::new();
 
@@ -652,10 +679,11 @@ extern "C" fn app_init(
         .ccd_enabled(true)
         .can_sleep(false)
         .build();
-
-    let flake_collider_template = ColliderBuilder::ball(5.0 / PHYSICS_METER_PX)
+    
+    let flake_radius = assets.flake.width.max(assets.flake.height) as f32 * 0.4 / PHYSICS_METER_PX;
+    let flake_collider_template = ColliderBuilder::ball(flake_radius)
         .collision_groups(InteractionGroups::new(Group::GROUP_2, Group::GROUP_1))
-        .restitution(0.75)
+        .restitution(1.0)
         .build();
 
     let mut angle:f32 = 0.0;
@@ -664,9 +692,11 @@ extern "C" fn app_init(
         let mut flake = flake_template.clone();
 
         let radian:f32 = angle.to_radians();
-        let direction_vector = vector![radian.cos(), radian.sin()];
-        flake.set_translation(flake.translation() + direction_vector * 50.0 / PHYSICS_METER_PX, true);
-        flake.set_linvel(direction_vector / PHYSICS_METER_PX * 20.0, true);
+        let direction_vector = vector![radian.cos(), radian.sin()] / PHYSICS_METER_PX;
+        let initial_distance = direction_vector * rand::thread_rng().gen_range(25.0..=75.0);
+
+        flake.set_translation(flake.translation() + initial_distance, true);
+        flake.set_linvel(direction_vector * rand::thread_rng().gen_range(100.0..=300.0), true);
 
         let ang_vel = rand::thread_rng().gen_range(-100..=100) as f32 / PHYSICS_METER_PX;
         flake.set_angvel(ang_vel, true);
@@ -693,22 +723,6 @@ extern "C" fn app_init(
         .build();
     collider_set.insert_with_parent(niko_collider, niko_body_handle, &mut rigid_body_set);
 
-    let window = unsafe {
-        sdl3_sys::video::SDL_GL_SetAttribute(sdl3_sys::video::SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-        sdl3_sys::video::SDL_GL_SetAttribute(sdl3_sys::video::SDL_GL_CONTEXT_MINOR_VERSION, 3);
-        sdl3_sys::video::SDL_GL_SetAttribute(sdl3_sys::video::SDL_GLattr::STENCIL_SIZE, 1);
-        sdl3_sys::video::SDL_CreateWindow(
-            c"snowglobe".as_ptr(), // <3 c string literals
-            GLOBE_WIDTH * 2,
-            GLOBE_HEIGHT * 2,
-            sdl3_sys::video::SDL_WINDOW_OPENGL
-                | sdl3_sys::video::SDL_WINDOW_TRANSPARENT
-                | sdl3_sys::video::SDL_WINDOW_ALWAYS_ON_TOP
-                | sdl3_sys::video::SDL_WINDOW_BORDERLESS
-                | sdl3_sys::video::SDL_WINDOW_UTILITY,
-        )
-    };
-
     unsafe {
         let file = c"src/assets/window_shape.bmp".as_ptr();
         let surface = sdl3_sys::surface::SDL_LoadBMP(file);
@@ -720,15 +734,6 @@ extern "C" fn app_init(
     unsafe {
         sdl3_sys::video::SDL_SetWindowHitTest(window, Some(hit_test_fn), std::ptr::null_mut());
     }
-
-    // initialize glow
-    let gl = unsafe {
-        sdl3_sys::video::SDL_GL_CreateContext(window);
-        glow::Context::from_loader_function_cstr(|s| {
-            sdl3_sys::video::SDL_GL_GetProcAddress(s.as_ptr())
-                .map_or(std::ptr::null(), |p| p as *const _)
-        })
-    };
 
     unsafe {
         gl.enable(glow::STENCIL_TEST);
@@ -769,7 +774,7 @@ extern "C" fn app_init(
         shader: shader::Shader::new(&gl),
         vertex_array: create_vertex_buffer(&gl),
 
-        assets: assets::Assets::load(&gl),
+        assets,
         niko: Niko::default(),
         state: State::Stopped,
         scale: 2,
