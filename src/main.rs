@@ -2,7 +2,7 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)] // we have functions that are marked as pub, but are only used in C
 
 use rand::Rng;
-use glow::HasContext;
+use glow::{HasContext, NativeBuffer, UniformLocation, VertexArray};
 use nalgebra::UnitComplex;
 use rapier2d::prelude::*;
 use sdl3_sys::{surface::SDL_Surface, video::SDL_Window};
@@ -13,31 +13,36 @@ use std::{
     time::{Duration, Instant},
 };
 
-struct DebugRender<'a> {
-    gl: &'a glow::Context
+struct DebugRenderBackendParams<'a> {
+    gl: &'a glow::Context,
+    u_color_location: Option<&'a UniformLocation>
 }
 
-impl<'a> rapier2d::pipeline::DebugRenderBackend for DebugRender<'a> {
+impl<'a> rapier2d::pipeline::DebugRenderBackend for DebugRenderBackendParams<'a> {
     fn draw_line(
       &mut self,
-      object: rapier2d::pipeline::DebugRenderObject<'_>,
-      a: Point<f32>,
-      b: Point<f32>,
+      _: rapier2d::pipeline::DebugRenderObject<'_>,
+      start: Point<f32>,
+      end: Point<f32>,
       color: [f32; 4],
     ) {
         unsafe {
-            // let vertices = [a.x, a.y, b.x, b.y];
-            let vertices = [-1.0, -1.0, 1.0, 1.0];
+            self.gl.uniform_4_f32_slice(self.u_color_location, color.as_ref());
 
-            let vbo = self.gl.create_buffer().expect("failed to create buffer");
-            self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+            let vertices = [
+                start.x * PHYSICS_METER_PX,
+                start.y * PHYSICS_METER_PX,
+                end.x * PHYSICS_METER_PX,
+                end.y * PHYSICS_METER_PX
+            ];
+
             self.gl.buffer_data_u8_slice(
                 glow::ARRAY_BUFFER,
                 bytemuck::cast_slice(&vertices),
-                glow::STATIC_DRAW
+                glow::DYNAMIC_DRAW
             );
 
-            self.gl.draw_arrays(glow::LINE, 0, 2);
+            self.gl.draw_arrays(glow::LINES, 0, 2);
         }
     }
 }
@@ -245,11 +250,11 @@ pub mod shader {
             }
 
             let u_translation = unsafe { gl.get_uniform_location(program, "u_translation") }
-                .expect("failed to get uniform location");
+                .expect("failed to get uniform location for u_translation");
             let u_matrix = unsafe { gl.get_uniform_location(program, "u_matrix") }
-                .expect("failed to get uniform location");
+                .expect("failed to get uniform location for u_matrix");
             let u_texture = unsafe { gl.get_uniform_location(program, "u_texture") }
-                .expect("failed to get uniform location");
+                .expect("failed to get uniform location for u_texture");
 
             Shader {
                 program,
@@ -258,76 +263,6 @@ pub mod shader {
                 u_matrix,
                 u_texture,
             }
-        }
-    }
-}
-
-pub mod debug_shader {
-    use glow::HasContext;
-
-    pub const VERTEX: &str = include_str!("shaders/debug.vert");
-    pub const FRAGMENT: &str = include_str!("shaders/debug.frag");
-
-    pub struct DebugShader {
-        pub program: glow::NativeProgram,
-        pub u_color: glow::UniformLocation
-    }
-    
-    pub fn new(gl: &glow::Context) -> DebugShader {
-
-        let program = unsafe { gl.create_program() }.expect("failed to create debug program");
-
-        let vert_shader = unsafe { gl.create_shader(glow::VERTEX_SHADER) }
-            .expect("failed to create vertex shader");
-
-        unsafe {
-            gl.shader_source(vert_shader, VERTEX);
-            gl.compile_shader(vert_shader);
-
-            if !gl.get_shader_compile_status(vert_shader) {
-                panic!(
-                    "failed to compile vertex shader: {}",
-                    gl.get_shader_info_log(vert_shader)
-                );
-            }
-
-            gl.attach_shader(program, vert_shader);
-        }
-
-        let frag_shader = unsafe { gl.create_shader(glow::FRAGMENT_SHADER) }
-            .expect("failed to create fragment shader");
-
-        unsafe {
-            gl.shader_source(frag_shader, FRAGMENT);
-            gl.compile_shader(frag_shader);
-
-            if !gl.get_shader_compile_status(frag_shader) {
-                panic!(
-                    "failed to compile fragment shader: {}",
-                    gl.get_shader_info_log(frag_shader)
-                );
-            }
-
-            gl.attach_shader(program, frag_shader);
-        }
-        
-        unsafe {
-            gl.link_program(program);
-
-            if !gl.get_program_link_status(program) {
-                panic!(
-                    "failed to link program: {}",
-                    gl.get_program_info_log(program)
-                );
-            }
-        }
-        
-        let u_color = unsafe { gl.get_uniform_location(program, "u_color") }
-            .expect("failed to get uniform location");
-
-        DebugShader {
-            program,
-            u_color,
         }
     }
 }
@@ -453,7 +388,7 @@ extern "C" fn hit_test_fn(
     sdl3_sys::video::SDL_HitTestResult::DRAGGABLE
 }
 
-fn create_vertex_buffer(gl: &glow::Context) -> glow::NativeVertexArray {
+fn create_vertex_buffer(gl: &glow::Context) -> (glow::NativeVertexArray, glow::NativeBuffer) {
     #[repr(C)]
     #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
     struct Vertex {
@@ -515,13 +450,70 @@ fn create_vertex_buffer(gl: &glow::Context) -> glow::NativeVertexArray {
         gl.bind_vertex_array(None);
         gl.bind_buffer(glow::ARRAY_BUFFER, None);
 
-        vao
+        return (vao, buffer);
     }
 }
 
-fn create_debug_vertex_buffer(gl: &glow::Context) -> glow::NativeVertexArray {
+struct DebugRenderer {
+    pub pipeline: DebugRenderPipeline,
+    pub program: Option<glow::NativeProgram>,
+    pub buffer: Option<NativeBuffer>,
+    pub vertex_array: Option<VertexArray>,
+    pub u_color_location: UniformLocation,
+}
+
+fn create_debug_renderer(gl: &glow::Context, vertex_shader_src: &str, fragment_shader_src: &str) -> DebugRenderer {
     unsafe {
+
+        let vert_shader = gl.create_shader(glow::VERTEX_SHADER)
+            .expect("failed to create vertex shader");
+
+        gl.shader_source(vert_shader, vertex_shader_src);
+        gl.compile_shader(vert_shader);
+        if !gl.get_shader_compile_status(vert_shader) {
+            panic!(
+                "failed to compile vertex shader: {}",
+                gl.get_shader_info_log(vert_shader)
+            );
+        }
+
+        let frag_shader = gl.create_shader(glow::FRAGMENT_SHADER)
+            .expect("failed to create fragment shader");
+
+        gl.shader_source(frag_shader, fragment_shader_src);
+        gl.compile_shader(frag_shader);
+        if !gl.get_shader_compile_status(frag_shader) {
+            panic!(
+                "failed to compile fragment shader: {}",
+                gl.get_shader_info_log(frag_shader)
+            );
+        }
+
+        let program = gl.create_program().expect("failed to create debug program");
+        gl.attach_shader(program, vert_shader);
+        gl.attach_shader(program, frag_shader);
+        gl.link_program(program);
+        if !gl.get_program_link_status(program) {
+            panic!(
+                "failed to link program: {}",
+                gl.get_program_info_log(program)
+            );
+        }
+
+        let u_color_location = gl.get_uniform_location(program, "u_color")
+            .expect("failed to get uniform location for u_color");
+
         let vao = gl.create_vertex_array().expect("failed to create vertex array");
+        let vbo = gl.create_buffer().expect("failed to create buffer");
+
+        gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+        let vertices:[f32;4] = [1.0, 1.0, 1.0, 1.0];
+        gl.buffer_data_u8_slice(
+            glow::ARRAY_BUFFER,
+            bytemuck::cast_slice(&vertices),
+            glow::DYNAMIC_DRAW
+        );
+
         gl.bind_vertex_array(Some(vao));
 
         gl.enable_vertex_attrib_array(0);
@@ -537,7 +529,13 @@ fn create_debug_vertex_buffer(gl: &glow::Context) -> glow::NativeVertexArray {
         gl.bind_buffer(glow::ARRAY_BUFFER, None);
         gl.bind_vertex_array(None);
 
-        vao
+        DebugRenderer {
+            pipeline: DebugRenderPipeline::new(Default::default(), DebugRenderMode::all()),
+            program: Some(program),
+            buffer: Some(vbo),
+            vertex_array: Some(vao),
+            u_color_location: u_color_location,
+        }
     }
 }
 
@@ -581,12 +579,9 @@ struct App {
     gl: glow::Context,
 
     shader: shader::Shader,
-    debug_shader: debug_shader::DebugShader,
+    vertex_array: (glow::NativeVertexArray, glow::NativeBuffer),
+
     assets: assets::Assets,
-
-    vertex_array: glow::NativeVertexArray,
-    debug_vertex_array: glow::NativeVertexArray,
-
     niko: Niko,
     state: State,
     scale: i32, // 2 by default
@@ -608,7 +603,7 @@ struct App {
     niko_body_handle: RigidBodyHandle,
     flake_handles: [RigidBodyHandle; FLAKE_COUNT],
 
-    debug_pipeline: DebugRenderPipeline,
+    debug_renderer: DebugRenderer
 }
 
 // i love smuggling pointers across FFI boundaries
@@ -698,16 +693,9 @@ extern "C" fn app_init(
         .build();
     collider_set.insert_with_parent(niko_collider, niko_body_handle, &mut rigid_body_set);
 
-    let integration_parameters = IntegrationParameters::default();
-    let physics_pipeline = PhysicsPipeline::new();
-    let island_manager = IslandManager::new();
-    let broad_phase = DefaultBroadPhase::new();
-    let narrow_phase = NarrowPhase::new();
-    let impulse_joint_set = ImpulseJointSet::new();
-    let multibody_joint_set = MultibodyJointSet::new();
-    let ccd_solver = CCDSolver::new();
-
     let window = unsafe {
+        sdl3_sys::video::SDL_GL_SetAttribute(sdl3_sys::video::SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        sdl3_sys::video::SDL_GL_SetAttribute(sdl3_sys::video::SDL_GL_CONTEXT_MINOR_VERSION, 3);
         sdl3_sys::video::SDL_GL_SetAttribute(sdl3_sys::video::SDL_GLattr::STENCIL_SIZE, 1);
         sdl3_sys::video::SDL_CreateWindow(
             c"snowglobe".as_ptr(), // <3 c string literals
@@ -741,6 +729,7 @@ extern "C" fn app_init(
                 .map_or(std::ptr::null(), |p| p as *const _)
         })
     };
+
     unsafe {
         gl.enable(glow::STENCIL_TEST);
         gl.stencil_func(glow::NOTEQUAL, 1, 0xFF);
@@ -756,18 +745,6 @@ extern "C" fn app_init(
         );
     }
 
-    let shader = shader::Shader::new(&gl);
-    let debug_shader = debug_shader::new(&gl);
-    let assets = assets::Assets::load(&gl);
-    let vertex_array = create_vertex_buffer(&gl);
-    let debug_vertex_array = create_debug_vertex_buffer(&gl);
-
-    let niko = Niko::default();
-    let state = State::Stopped;
-
-    let last = Instant::now();
-    let accum = Duration::ZERO;
-
     let mut last_window_x = 0;
     let mut last_window_y = 0;
     unsafe {
@@ -779,36 +756,38 @@ extern "C" fn app_init(
         last_window_x,
         last_window_y,
 
-        gl,
+        shader: shader::Shader::new(&gl),
+        vertex_array: create_vertex_buffer(&gl),
 
-        shader,
-        debug_shader,
-        assets,
-        vertex_array,
-        debug_vertex_array,
-
-        niko,
-        state,
+        assets: assets::Assets::load(&gl),
+        niko: Niko::default(),
+        state: State::Stopped,
         scale: 2,
 
-        last,
-        accum,
+        last: Instant::now(),
+        accum: Duration::ZERO,
 
-        integration_parameters,
-        physics_pipeline,
-        island_manager,
-        broad_phase,
-        narrow_phase,
-        impulse_joint_set,
-        multibody_joint_set,
+        integration_parameters: IntegrationParameters::default(),
+        physics_pipeline: PhysicsPipeline::new(),
+        island_manager: IslandManager::new(),
+        broad_phase: DefaultBroadPhase::new(),
+        narrow_phase: NarrowPhase::new(),
+        impulse_joint_set: ImpulseJointSet::new(),
+        multibody_joint_set: MultibodyJointSet::new(),
+        ccd_solver: CCDSolver::new(),
         rigid_body_set,
         collider_set,
-        ccd_solver,
 
         niko_body_handle,
         flake_handles,
 
-        debug_pipeline: DebugRenderPipeline::new(Default::default(), DebugRenderMode::all())
+        debug_renderer: create_debug_renderer(
+            &gl,
+            include_str!("shaders/debug.vert"),
+            include_str!("shaders/debug.frag")
+        ),
+
+        gl,
     };
     let app = Box::new(app);
     let app = Box::into_raw(app);
@@ -917,7 +896,8 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
         app.gl.clear(glow::COLOR_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
 
         app.gl.use_program(Some(app.shader.program));
-        app.gl.bind_vertex_array(Some(app.vertex_array));
+        app.gl.bind_buffer(glow::ARRAY_BUFFER, Some(app.vertex_array.1));
+        app.gl.bind_vertex_array(Some(app.vertex_array.0));
 
         // don't write stand to the stencil buffer
         app.gl.stencil_func(glow::ALWAYS, 1, 0xFF);
@@ -1022,12 +1002,17 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
             &app.shader,
         );
         
-        app.gl.use_program(Some(app.debug_shader.program));
-        app.gl.bind_vertex_array(Some(app.debug_vertex_array));
+        app.gl.use_program(app.debug_renderer.program);
+        app.gl.bind_vertex_array(app.debug_renderer.vertex_array);
+        app.gl.bind_buffer(glow::ARRAY_BUFFER, app.debug_renderer.buffer);
 
-        let mut render = DebugRender { gl: &app.gl };
-        app.debug_pipeline.render(
-            &mut render, 
+        let mut debug_params = DebugRenderBackendParams {
+            gl: &app.gl,
+            u_color_location: Some(&app.debug_renderer.u_color_location)
+        };
+
+        app.debug_renderer.pipeline.render(
+            &mut debug_params, 
             &app.rigid_body_set, 
             &app.collider_set,
             &app.impulse_joint_set,
