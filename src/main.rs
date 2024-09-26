@@ -1,43 +1,48 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![allow(clippy::not_unsafe_ptr_arg_deref)] // we have functions that are marked as pub, but are only used in C
 
-use rand::Rng;
 use glow::{HasContext, NativeBuffer, UniformLocation, VertexArray};
 use nalgebra::UnitComplex;
+use rand::Rng;
 use rapier2d::prelude::*;
 use sdl3_sys::{surface::SDL_Surface, video::SDL_Window};
 
 use std::{
-    env, ffi::{c_char, c_int, c_void}, ops::Mul, time::{Duration, Instant}
+    ffi::{c_char, c_int, c_void},
+    ops::Mul,
+    time::{Duration, Instant},
 };
 
+#[cfg(debug_assertions)]
 struct DebugRenderBackendParams<'a> {
     gl: &'a glow::Context,
-    u_color_location: Option<&'a UniformLocation>
+    u_color_location: Option<&'a UniformLocation>,
 }
 
+#[cfg(debug_assertions)]
 impl<'a> rapier2d::pipeline::DebugRenderBackend for DebugRenderBackendParams<'a> {
     fn draw_line(
-      &mut self,
-      _: rapier2d::pipeline::DebugRenderObject<'_>,
-      start: Point<f32>,
-      end: Point<f32>,
-      color: [f32; 4],
+        &mut self,
+        _: rapier2d::pipeline::DebugRenderObject<'_>,
+        start: Point<f32>,
+        end: Point<f32>,
+        color: [f32; 4],
     ) {
         unsafe {
-            self.gl.uniform_4_f32_slice(self.u_color_location, color.as_ref());
+            self.gl
+                .uniform_4_f32_slice(self.u_color_location, color.as_ref());
 
             let vertices = [
                 start.x * PHYSICS_METER_PX,
                 start.y * PHYSICS_METER_PX,
                 end.x * PHYSICS_METER_PX,
-                end.y * PHYSICS_METER_PX
+                end.y * PHYSICS_METER_PX,
             ];
 
             self.gl.buffer_data_u8_slice(
                 glow::ARRAY_BUFFER,
                 bytemuck::cast_slice(&vertices),
-                glow::DYNAMIC_DRAW
+                glow::DYNAMIC_DRAW,
             );
 
             self.gl.draw_arrays(glow::LINES, 0, 2);
@@ -98,7 +103,7 @@ pub mod assets {
     pub struct Assets {
         pub globe: Globe,
         pub niko: Niko,
-        pub flake: Texture
+        pub flake: Texture,
     }
 
     pub struct Globe {
@@ -366,13 +371,9 @@ const GRAVITY: &Vector<Real> = &vector![0.0, 3.0 / PHYSICS_METER_PX];
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum State {
     Stopped,
-    Moving {
-        max_velocity: f32
-    },
+    Moving { max_velocity: f32 },
     // cooldown until Niko stops being dizzy and uprights themselves
-    JustStopped {
-        cooldown: Duration
-    },
+    JustStopped { cooldown: Duration },
     Uprighting,
 }
 
@@ -448,10 +449,11 @@ fn create_vertex_buffer(gl: &glow::Context) -> (glow::NativeVertexArray, glow::N
         gl.bind_vertex_array(None);
         gl.bind_buffer(glow::ARRAY_BUFFER, None);
 
-        return (vao, buffer);
+        (vao, buffer)
     }
 }
 
+#[cfg(debug_assertions)]
 struct DebugRenderer {
     pub pipeline: DebugRenderPipeline,
     pub program: Option<glow::NativeProgram>,
@@ -460,10 +462,15 @@ struct DebugRenderer {
     pub u_color_location: UniformLocation,
 }
 
-fn create_debug_renderer(gl: &glow::Context, vertex_shader_src: &str, fragment_shader_src: &str) -> DebugRenderer {
+#[cfg(debug_assertions)]
+fn create_debug_renderer(
+    gl: &glow::Context,
+    vertex_shader_src: &str,
+    fragment_shader_src: &str,
+) -> DebugRenderer {
     unsafe {
-
-        let vert_shader = gl.create_shader(glow::VERTEX_SHADER)
+        let vert_shader = gl
+            .create_shader(glow::VERTEX_SHADER)
             .expect("failed to create vertex shader");
 
         gl.shader_source(vert_shader, vertex_shader_src);
@@ -475,7 +482,8 @@ fn create_debug_renderer(gl: &glow::Context, vertex_shader_src: &str, fragment_s
             );
         }
 
-        let frag_shader = gl.create_shader(glow::FRAGMENT_SHADER)
+        let frag_shader = gl
+            .create_shader(glow::FRAGMENT_SHADER)
             .expect("failed to create fragment shader");
 
         gl.shader_source(frag_shader, fragment_shader_src);
@@ -498,18 +506,21 @@ fn create_debug_renderer(gl: &glow::Context, vertex_shader_src: &str, fragment_s
             );
         }
 
-        let u_color_location = gl.get_uniform_location(program, "u_color")
+        let u_color_location = gl
+            .get_uniform_location(program, "u_color")
             .expect("failed to get uniform location for u_color");
 
-        let vao = gl.create_vertex_array().expect("failed to create vertex array");
+        let vao = gl
+            .create_vertex_array()
+            .expect("failed to create vertex array");
         let vbo = gl.create_buffer().expect("failed to create buffer");
 
         gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
-        let vertices:[f32;4] = [1.0, 1.0, 1.0, 1.0];
+        let vertices: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
         gl.buffer_data_u8_slice(
             glow::ARRAY_BUFFER,
             bytemuck::cast_slice(&vertices),
-            glow::DYNAMIC_DRAW
+            glow::DYNAMIC_DRAW,
         );
 
         gl.bind_vertex_array(Some(vao));
@@ -521,7 +532,7 @@ fn create_debug_renderer(gl: &glow::Context, vertex_shader_src: &str, fragment_s
             glow::FLOAT,
             false,
             2 * std::mem::size_of::<f32>() as i32,
-            0
+            0,
         );
 
         gl.bind_buffer(glow::ARRAY_BUFFER, None);
@@ -532,7 +543,7 @@ fn create_debug_renderer(gl: &glow::Context, vertex_shader_src: &str, fragment_s
             program: Some(program),
             buffer: Some(vbo),
             vertex_array: Some(vao),
-            u_color_location: u_color_location,
+            u_color_location,
         }
     }
 }
@@ -601,7 +612,8 @@ struct App {
     niko_body_handle: RigidBodyHandle,
     flake_handles: [RigidBodyHandle; FLAKE_COUNT],
 
-    debug_renderer: Option<DebugRenderer>
+    #[cfg(debug_assertions)]
+    debug_renderer: DebugRenderer,
 }
 
 // i love smuggling pointers across FFI boundaries
@@ -611,8 +623,6 @@ extern "C" fn app_init(
     _argc: c_int,
     _argv: *mut *mut c_char,
 ) -> sdl3_sys::init::SDL_AppResult {
-    let args: Vec<String> = env::args().collect();
-
     unsafe {
         sdl3_sys::init::SDL_Init(sdl3_sys::init::SDL_INIT_VIDEO | sdl3_sys::init::SDL_INIT_EVENTS)
     };
@@ -641,7 +651,7 @@ extern "C" fn app_init(
                 .map_or(std::ptr::null(), |p| p as *const _)
         })
     };
-    
+
     let assets = assets::Assets::load(&gl);
 
     let mut rigid_body_set = RigidBodySet::new();
@@ -669,11 +679,13 @@ extern "C" fn app_init(
 
     let globe_collider = ColliderBuilder::polyline(globe_vertices, None)
         .restitution(0.75)
-        .collision_groups(InteractionGroups::new(Group::GROUP_1, Group::GROUP_2 | Group::GROUP_3))
+        .collision_groups(InteractionGroups::new(
+            Group::GROUP_1,
+            Group::GROUP_2 | Group::GROUP_3,
+        ))
         .build();
     collider_set.insert(globe_collider);
 
-    let mut flake_handles: [RigidBodyHandle; FLAKE_COUNT] = [Default::default(); FLAKE_COUNT];
     let flake_template = RigidBodyBuilder::dynamic()
         .translation(vector![112.0, 124.0] / PHYSICS_METER_PX)
         .ccd_enabled(true)
@@ -681,34 +693,42 @@ extern "C" fn app_init(
         .angular_damping(0.1)
         .can_sleep(false)
         .build();
-    
+
     let flake_radius = assets.flake.width.max(assets.flake.height) as f32 * 0.4 / PHYSICS_METER_PX;
     let flake_collider_template = ColliderBuilder::ball(flake_radius)
         .collision_groups(InteractionGroups::new(Group::GROUP_2, Group::GROUP_1))
         .restitution(1.0)
         .build();
 
-    let mut angle:f32 = 0.0;
-    let angle_delta:f32 = 360.0 / (FLAKE_COUNT + 1) as f32; 
-    for i in 0..FLAKE_COUNT {
+    let mut angle: f32 = 0.0;
+    let angle_delta: f32 = 360.0 / (FLAKE_COUNT + 1) as f32;
+
+    let flake_handles = std::array::from_fn(|_| {
         let mut flake = flake_template.clone();
 
-        let radian:f32 = angle.to_radians();
+        let radian: f32 = angle.to_radians();
         let direction_vector = vector![radian.cos(), radian.sin()] / PHYSICS_METER_PX;
         let initial_distance = direction_vector * rand::thread_rng().gen_range(25.0..=75.0);
+        angle += angle_delta;
 
         flake.set_translation(flake.translation() + initial_distance, true);
-        flake.set_linvel(direction_vector * rand::thread_rng().gen_range(100.0..=300.0), true);
+        flake.set_linvel(
+            direction_vector * rand::thread_rng().gen_range(100.0..=300.0),
+            true,
+        );
 
         let ang_vel = rand::thread_rng().gen_range(-100..=100) as f32 / PHYSICS_METER_PX;
         flake.set_angvel(ang_vel, true);
 
         let flake_handle = rigid_body_set.insert(flake);
-        collider_set.insert_with_parent(flake_collider_template.clone(), flake_handle, &mut rigid_body_set);
-        flake_handles[i] = flake_handle;
+        collider_set.insert_with_parent(
+            flake_collider_template.clone(),
+            flake_handle,
+            &mut rigid_body_set,
+        );
 
-        angle += angle_delta;
-    }
+        flake_handle
+    });
 
     let niko_body = RigidBodyBuilder::dynamic()
         .translation(vector![111.0, 109.0] / PHYSICS_METER_PX)
@@ -758,15 +778,12 @@ extern "C" fn app_init(
         sdl3_sys::video::SDL_GetWindowPosition(window, &mut last_window_x, &mut last_window_y);
     }
 
-    let debugdraw = args.iter().any(|arg| *arg == "debugdraw");
-    let debug_renderer = match debugdraw {
-        true => Some(create_debug_renderer(
-            &gl,
-            include_str!("shaders/debug.vert"),
-            include_str!("shaders/debug.frag")
-        )),
-        false => None,
-    };
+    #[cfg(debug_assertions)]
+    let debug_renderer = create_debug_renderer(
+        &gl,
+        include_str!("shaders/debug.vert"),
+        include_str!("shaders/debug.frag"),
+    );
 
     let app = App {
         window,
@@ -798,6 +815,7 @@ extern "C" fn app_init(
         niko_body_handle,
         flake_handles,
 
+        #[cfg(debug_assertions)]
         debug_renderer,
         gl,
     };
@@ -818,6 +836,8 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
     let delta = now.duration_since(app.last);
     app.accum += delta;
     app.last = now;
+
+    app.integration_parameters.dt = delta.as_secs_f32();
 
     app.physics_pipeline.step(
         GRAVITY,
@@ -876,25 +896,27 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
 
             // looks like Niko isn't not moving anymore, so set state to JustStopped
             if !niko_moving {
-                let cooldown_normalized_velocity = (*max_velocity / VELOCITY_FOR_MAX_UPRIGHT_COOLDOWN).min(1.0);
-                let cooldown_ms = (cooldown_normalized_velocity * MAX_UPRIGHT_COOLDOWN_MS).max(MIN_UPRIGHT_COOLDOWN_MS) as u64;
+                let cooldown_normalized_velocity =
+                    (*max_velocity / VELOCITY_FOR_MAX_UPRIGHT_COOLDOWN).min(1.0);
+                let cooldown_ms = (cooldown_normalized_velocity * MAX_UPRIGHT_COOLDOWN_MS)
+                    .max(MIN_UPRIGHT_COOLDOWN_MS) as u64;
                 app.state = State::JustStopped {
-                    cooldown: Duration::from_millis(cooldown_ms)
+                    cooldown: Duration::from_millis(cooldown_ms),
                 };
             }
         }
-        State::JustStopped {
-            ref mut cooldown
-        } => {
+        State::JustStopped { ref mut cooldown } => {
             *cooldown = cooldown.saturating_sub(delta);
             if *cooldown == Duration::ZERO {
                 app.state = State::Uprighting;
             }
-        },
+        }
         State::Uprighting => {
             let body_angle = niko_body.rotation().angle();
             if body_angle.abs() > UPRIGHTING_ANGLE_SNAP_MARGIN {
-                let delta = (body_angle.abs() * UPRIGHTING_ANGLE_REMAINDER_MULTIPLIER + UPRIGHTING_ANGLE_STATIC_GROWTH) * -body_angle.signum();
+                let delta = (body_angle.abs() * UPRIGHTING_ANGLE_REMAINDER_MULTIPLIER
+                    + UPRIGHTING_ANGLE_STATIC_GROWTH)
+                    * -body_angle.signum();
                 niko_body.set_rotation(UnitComplex::new(body_angle + delta), false);
             } else {
                 niko_body.set_rotation(Default::default(), false);
@@ -905,10 +927,12 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
 
     unsafe {
         app.gl.clear_color(0.0, 0.0, 0.0, 0.0);
-        app.gl.clear(glow::COLOR_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
+        app.gl
+            .clear(glow::COLOR_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
 
         app.gl.use_program(Some(app.shader.program));
-        app.gl.bind_buffer(glow::ARRAY_BUFFER, Some(app.vertex_array.1));
+        app.gl
+            .bind_buffer(glow::ARRAY_BUFFER, Some(app.vertex_array.1));
         app.gl.bind_vertex_array(Some(app.vertex_array.0));
 
         // don't write stand to the stencil buffer
@@ -989,7 +1013,7 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
         {
             let texture = app.assets.flake;
             let tex_size = glam::vec2(texture.width as f32, texture.height as f32);
-            for i in 0..FLAKE_COUNT  {
+            for i in 0..FLAKE_COUNT {
                 let flake_handle = app.flake_handles[i];
                 let flake_body = &app.rigid_body_set[flake_handle];
 
@@ -1002,7 +1026,7 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
                     * glam::Affine2::from_angle(flake_body_position.rotation.angle())
                     * glam::Affine2::from_translation(tex_size / -2.0)
                     * glam::Affine2::from_scale(tex_size);
-                
+
                 draw_texture_affine(&app.gl, transform, texture, &app.shader);
             }
         }
@@ -1014,30 +1038,39 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
             app.assets.globe.glass,
             &app.shader,
         );
-        
-        if app.debug_renderer.is_some(){
-            let debug_renderer:&mut DebugRenderer = app.debug_renderer.as_mut().unwrap();
 
-            app.gl.use_program(debug_renderer.program);
-            app.gl.bind_vertex_array(debug_renderer.vertex_array);
-            app.gl.bind_buffer(glow::ARRAY_BUFFER, debug_renderer.buffer);
-    
+        #[cfg(debug_assertions)]
+        {
+            app.gl.use_program(app.debug_renderer.program);
+            app.gl.bind_vertex_array(app.debug_renderer.vertex_array);
+            app.gl
+                .bind_buffer(glow::ARRAY_BUFFER, app.debug_renderer.buffer);
+
             let mut debug_params = DebugRenderBackendParams {
                 gl: &app.gl,
-                u_color_location: Some(&debug_renderer.u_color_location)
+                u_color_location: Some(&app.debug_renderer.u_color_location),
             };
-    
-            debug_renderer.pipeline.render(
-                &mut debug_params, 
-                &app.rigid_body_set, 
+
+            app.debug_renderer.pipeline.render(
+                &mut debug_params,
+                &app.rigid_body_set,
                 &app.collider_set,
                 &app.impulse_joint_set,
                 &app.multibody_joint_set,
-                &app.narrow_phase
+                &app.narrow_phase,
             );
         }
 
+        let before_swap = Instant::now();
         sdl3_sys::video::SDL_GL_SwapWindow(app.window);
+        let after_swap = Instant::now();
+
+        let swap_duration = after_swap.duration_since(before_swap);
+        let sleep_duration = Duration::from_secs_f32(1.0 / 60.0).saturating_sub(swap_duration);
+
+        if sleep_duration > Duration::ZERO {
+            std::thread::sleep(sleep_duration);
+        }
     }
 
     sdl3_sys::init::SDL_AppResult::CONTINUE
@@ -1102,17 +1135,11 @@ extern "C" fn app_event(
                 state.last_window_y = new_y;
 
                 let force = vector![diff_x as f32, diff_y as f32] / PHYSICS_METER_PX;
-                state.rigid_body_set[state.niko_body_handle].apply_impulse(
-                    force,
-                    true,
-                );
+                state.rigid_body_set[state.niko_body_handle].apply_impulse(force, true);
 
                 let flake_force = force * 0.01;
                 for i in 0..FLAKE_COUNT {
-                    state.rigid_body_set[state.flake_handles[i]].apply_impulse(
-                        flake_force,
-                        true,
-                    );
+                    state.rigid_body_set[state.flake_handles[i]].apply_impulse(flake_force, true);
                 }
 
                 sdl3_sys::init::SDL_AppResult::CONTINUE
@@ -1141,7 +1168,10 @@ extern "C" {
         app_quit: sdl3_sys::init::SDL_AppQuit_func,
     ) -> c_int;
 
+    // these are actually FFI safe
+    #[allow(improper_ctypes)]
     pub fn SDL_SetWindowShape(window: *mut SDL_Window, shape: *mut SDL_Surface) -> bool;
+    #[allow(improper_ctypes)]
     pub fn SDL_SetSurfaceColorKey(surface: *mut SDL_Surface, enabled: bool, key: u32) -> bool;
 }
 
