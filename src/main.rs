@@ -361,7 +361,7 @@ const UPRIGHTING_ANGLE_STATIC_GROWTH: f32 = 0.01;
 const UPRIGHTING_ANGLE_SNAP_MARGIN: f32 = 0.02;
 
 const FLAKE_COUNT: usize = 50;
-const GRAVITY: &Vector<Real> = &vector![0.0, 1.0 / PHYSICS_METER_PX];
+const GRAVITY: &Vector<Real> = &vector![0.0, 3.0 / PHYSICS_METER_PX];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum State {
@@ -677,6 +677,8 @@ extern "C" fn app_init(
     let flake_template = RigidBodyBuilder::dynamic()
         .translation(vector![112.0, 124.0] / PHYSICS_METER_PX)
         .ccd_enabled(true)
+        .linear_damping(0.1)
+        .angular_damping(0.1)
         .can_sleep(false)
         .build();
     
@@ -1099,12 +1101,13 @@ extern "C" fn app_event(
                 state.last_window_x = new_x;
                 state.last_window_y = new_y;
 
+                let force = vector![diff_x as f32, diff_y as f32] / PHYSICS_METER_PX;
                 state.rigid_body_set[state.niko_body_handle].apply_impulse(
-                    vector![diff_x as f32, diff_y as f32] / PHYSICS_METER_PX,
+                    force,
                     true,
                 );
 
-                let flake_force = vector![diff_x as f32, diff_y as f32] / 300.0 / PHYSICS_METER_PX;
+                let flake_force = force * 0.01;
                 for i in 0..FLAKE_COUNT {
                     state.rigid_body_set[state.flake_handles[i]].apply_impulse(
                         flake_force,
