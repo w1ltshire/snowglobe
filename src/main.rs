@@ -8,9 +8,7 @@ use rapier2d::prelude::*;
 use sdl3_sys::{surface::SDL_Surface, video::SDL_Window};
 
 use std::{
-    ffi::{c_char, c_int, c_void},
-    ops::Mul,
-    time::{Duration, Instant},
+    env, ffi::{c_char, c_int, c_void}, ops::Mul, time::{Duration, Instant}
 };
 
 struct DebugRenderBackendParams<'a> {
@@ -362,7 +360,7 @@ const UPRIGHTING_ANGLE_REMAINDER_MULTIPLIER: f32 = 0.05;
 const UPRIGHTING_ANGLE_STATIC_GROWTH: f32 = 0.01;
 const UPRIGHTING_ANGLE_SNAP_MARGIN: f32 = 0.02;
 
-const FLAKE_COUNT: usize = 25;
+const FLAKE_COUNT: usize = 50;
 const GRAVITY: &Vector<Real> = &vector![0.0, 1.0 / PHYSICS_METER_PX];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -603,7 +601,7 @@ struct App {
     niko_body_handle: RigidBodyHandle,
     flake_handles: [RigidBodyHandle; FLAKE_COUNT],
 
-    debug_renderer: DebugRenderer
+    debug_renderer: Option<DebugRenderer>
 }
 
 // i love smuggling pointers across FFI boundaries
@@ -613,6 +611,8 @@ extern "C" fn app_init(
     _argc: c_int,
     _argv: *mut *mut c_char,
 ) -> sdl3_sys::init::SDL_AppResult {
+    let args: Vec<String> = env::args().collect();
+
     unsafe {
         sdl3_sys::init::SDL_Init(sdl3_sys::init::SDL_INIT_VIDEO | sdl3_sys::init::SDL_INIT_EVENTS)
     };
@@ -751,6 +751,16 @@ extern "C" fn app_init(
         sdl3_sys::video::SDL_GetWindowPosition(window, &mut last_window_x, &mut last_window_y);
     }
 
+    let debugdraw = args.iter().any(|arg| *arg == "debugdraw");
+    let debug_renderer = match debugdraw {
+        true => Some(create_debug_renderer(
+            &gl,
+            include_str!("shaders/debug.vert"),
+            include_str!("shaders/debug.frag")
+        )),
+        false => None,
+    };
+
     let app = App {
         window,
         last_window_x,
@@ -781,12 +791,7 @@ extern "C" fn app_init(
         niko_body_handle,
         flake_handles,
 
-        debug_renderer: create_debug_renderer(
-            &gl,
-            include_str!("shaders/debug.vert"),
-            include_str!("shaders/debug.frag")
-        ),
-
+        debug_renderer,
         gl,
     };
     let app = Box::new(app);
@@ -977,18 +982,19 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
         {
             let texture = app.assets.flake;
             let tex_size = glam::vec2(texture.width as f32, texture.height as f32);
-            let tex_offset = tex_size / 2.0;
             for i in 0..FLAKE_COUNT  {
                 let flake_handle = app.flake_handles[i];
                 let flake_body = &app.rigid_body_set[flake_handle];
 
                 let flake_body_position = *flake_body.position();
-                let flake_pos = flake_body_position * point![0.0, 0.0] * PHYSICS_METER_PX;
+                let flake_pos = flake_body_position * point![0.0, 0.0];
 
-                let flake_vec2 = glam::vec2(flake_pos.x, flake_pos.y) - glam::vec2(5.0, -5.0);
-                let transform = glam::Affine2::from_translation(flake_vec2);
-                let transform = transform * glam::Affine2::from_scale(tex_size);
-                let transform = transform * glam::Affine2::from_angle(flake_body_position.rotation.angle());
+                let position = glam::vec2(flake_pos.x, flake_pos.y) * PHYSICS_METER_PX;
+
+                let transform = glam::Affine2::from_translation(position)
+                    * glam::Affine2::from_angle(flake_body_position.rotation.angle())
+                    * glam::Affine2::from_translation(tex_size / -2.0)
+                    * glam::Affine2::from_scale(tex_size);
                 
                 draw_texture_affine(&app.gl, transform, texture, &app.shader);
             }
@@ -1002,23 +1008,27 @@ extern "C" fn app_iterate(appstate: *mut c_void) -> sdl3_sys::init::SDL_AppResul
             &app.shader,
         );
         
-        app.gl.use_program(app.debug_renderer.program);
-        app.gl.bind_vertex_array(app.debug_renderer.vertex_array);
-        app.gl.bind_buffer(glow::ARRAY_BUFFER, app.debug_renderer.buffer);
+        if app.debug_renderer.is_some(){
+            let debug_renderer:&mut DebugRenderer = app.debug_renderer.as_mut().unwrap();
 
-        let mut debug_params = DebugRenderBackendParams {
-            gl: &app.gl,
-            u_color_location: Some(&app.debug_renderer.u_color_location)
-        };
-
-        app.debug_renderer.pipeline.render(
-            &mut debug_params, 
-            &app.rigid_body_set, 
-            &app.collider_set,
-            &app.impulse_joint_set,
-            &app.multibody_joint_set,
-            &app.narrow_phase
-        );
+            app.gl.use_program(debug_renderer.program);
+            app.gl.bind_vertex_array(debug_renderer.vertex_array);
+            app.gl.bind_buffer(glow::ARRAY_BUFFER, debug_renderer.buffer);
+    
+            let mut debug_params = DebugRenderBackendParams {
+                gl: &app.gl,
+                u_color_location: Some(&debug_renderer.u_color_location)
+            };
+    
+            debug_renderer.pipeline.render(
+                &mut debug_params, 
+                &app.rigid_body_set, 
+                &app.collider_set,
+                &app.impulse_joint_set,
+                &app.multibody_joint_set,
+                &app.narrow_phase
+            );
+        }
 
         sdl3_sys::video::SDL_GL_SwapWindow(app.window);
     }
