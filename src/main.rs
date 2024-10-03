@@ -366,6 +366,8 @@ const UPRIGHTING_ANGLE_STATIC_GROWTH: f32 = 0.01;
 const UPRIGHTING_ANGLE_SNAP_MARGIN: f32 = 0.02;
 
 const FLAKE_COUNT: usize = 50;
+const FLAKE_COLLISION_WIDTH: f32 = 4.0 / PHYSICS_METER_PX;
+const FLAKE_COLLISION_HEIGHT: f32 = 2.0 / PHYSICS_METER_PX;
 const GRAVITY: &Vector<Real> = &vector![0.0, 3.0 / PHYSICS_METER_PX];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -694,8 +696,7 @@ extern "C" fn app_init(
         .can_sleep(false)
         .build();
 
-    let flake_radius = assets.flake.width.max(assets.flake.height) as f32 * 0.4 / PHYSICS_METER_PX;
-    let flake_collider_template = ColliderBuilder::ball(flake_radius)
+    let flake_collider_template = ColliderBuilder::cuboid(FLAKE_COLLISION_WIDTH, FLAKE_COLLISION_HEIGHT)
         .collision_groups(InteractionGroups::new(Group::GROUP_2, Group::GROUP_1))
         .restitution(1.0)
         .build();
