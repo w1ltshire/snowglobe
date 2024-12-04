@@ -354,8 +354,8 @@ const PHYSICS_METER_PX: f32 = 100.0;
 const NIKO_COLLIDER_WIDTH: f32 = 56.0;
 const NIKO_COLLIDER_HEIGHT: f32 = 103.0;
 
-const GLOBE_WIDTH: i32 = 224;
-const GLOBE_HEIGHT: i32 = 248;
+const GLOBE_WIDTH: i32 = 224 / 2;
+const GLOBE_HEIGHT: i32 = 248 / 2;
 
 const VELOCITY_FOR_MAX_UPRIGHT_COOLDOWN: f32 = 10.0;
 const MIN_UPRIGHT_COOLDOWN_MS: f32 = 1000.0;
@@ -797,7 +797,7 @@ extern "C" fn app_init(
         assets,
         niko: Niko::default(),
         state: State::Stopped,
-        scale: 2,
+        scale: 3,
 
         last: Instant::now(),
         accum: Duration::ZERO,
@@ -825,6 +825,7 @@ extern "C" fn app_init(
 
     unsafe {
         *appstate = app.cast::<c_void>();
+        resize_window(*appstate);
     }
 
     sdl3_sys::init::SDL_AppResult::CONTINUE
@@ -1092,36 +1093,14 @@ extern "C" fn app_event(
                     sdl3_sys::keycode::SDLK_ESCAPE => sdl3_sys::init::SDL_AppResult::FAILURE,
                     sdl3_sys::keycode::SDLK_UP => {
                         state.scale += 1;
-                        state.scale = state.scale.min(4);
-                        sdl3_sys::video::SDL_SetWindowSize(
-                            state.window,
-                            GLOBE_WIDTH * state.scale,
-                            GLOBE_HEIGHT * state.scale,
-                        );
-                        // resize opengl viewport to match window size
-                        state.gl.viewport(
-                            0,
-                            0,
-                            GLOBE_WIDTH * state.scale,
-                            GLOBE_HEIGHT * state.scale,
-                        );
+                        state.scale = state.scale.min(7);
+                        resize_window(appstate);
                         sdl3_sys::init::SDL_AppResult::CONTINUE
                     }
                     sdl3_sys::keycode::SDLK_DOWN => {
                         state.scale -= 1;
                         state.scale = state.scale.max(1);
-                        sdl3_sys::video::SDL_SetWindowSize(
-                            state.window,
-                            GLOBE_WIDTH * state.scale,
-                            GLOBE_HEIGHT * state.scale,
-                        );
-                        // resize opengl viewport to match window size
-                        state.gl.viewport(
-                            0,
-                            0,
-                            GLOBE_WIDTH * state.scale,
-                            GLOBE_HEIGHT * state.scale,
-                        );
+                        resize_window(appstate);
                         sdl3_sys::init::SDL_AppResult::CONTINUE
                     }
                     _ => sdl3_sys::init::SDL_AppResult::CONTINUE,
@@ -1174,6 +1153,26 @@ extern "C" {
     pub fn SDL_SetWindowShape(window: *mut SDL_Window, shape: *mut SDL_Surface) -> bool;
     #[allow(improper_ctypes)]
     pub fn SDL_SetSurfaceColorKey(surface: *mut SDL_Surface, enabled: bool, key: u32) -> bool;
+}
+
+fn resize_window(appstate: *mut c_void) {
+    unsafe {
+        let state = &mut *appstate.cast::<App>();
+
+        sdl3_sys::video::SDL_SetWindowSize(
+            state.window,
+            GLOBE_WIDTH * state.scale,
+            GLOBE_HEIGHT * state.scale,
+        );
+
+        // resize opengl viewport to match window size
+        state.gl.viewport(
+            0, 
+            0, 
+            GLOBE_WIDTH * state.scale, 
+            GLOBE_HEIGHT * state.scale
+        );
+    }
 }
 
 fn main() {
