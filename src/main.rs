@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![allow(clippy::not_unsafe_ptr_arg_deref)] // we have functions that are marked as pub, but are only used in C
 
-use glow::{HasContext, NativeBuffer, UniformLocation, VertexArray};
+use glow::HasContext;
 use nalgebra::UnitComplex;
 use rand::Rng;
 use rapier2d::prelude::*;
