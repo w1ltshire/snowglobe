@@ -9,3 +9,9 @@ windowrulev2 = noblur, class:snowglobe
 windowrulev2 = noshadow, class:snowglobe
 windowrulev2 = noborder, class:snowglobe
 ```
+
+Compile without debug renderer. You need to have Rust installed on your computer:
+```sh
+cargo build --release
+```
+Compiled binary is `target/release/snowglobe`. Copy it to any directory that is in your $PATH environment variable.
